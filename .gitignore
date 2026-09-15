@@ -1,0 +1,9 @@
+/target/
+/blip.toml
+/blip-history.jsonl
+*.jsonl
+*.log
+.env
+.env.*
+!.env.example
+

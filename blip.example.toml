@@ -1,0 +1,13 @@
+bind = "0.0.0.0:8080"
+history_file = "/var/lib/blip/history.jsonl"
+
+[[projects]]
+name = "my-app"
+provider = "gitlab" # gitlab, github, gitea, or codeberg
+secret = "replace-with-a-unique-secret"
+script = "/srv/my-app/deploy"
+event = "push"
+branch = "develop"
+track = true
+timeout_seconds = 1800
+lock_file = "/srv/my-app/.blip.lock"

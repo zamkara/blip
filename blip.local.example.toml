@@ -1,0 +1,14 @@
+# Salin menjadi blip.toml. File blip.toml di-ignore agar secret tidak masuk Git.
+bind = "127.0.0.1:8080"
+history_file = "./blip-history.jsonl"
+
+[[projects]]
+name = "blip-test"
+provider = "gitlab"
+secret = "ganti-dengan-secret-webhook-yang-sama-di-gitlab"
+script = "./scripts/test-deploy.sh"
+event = "push"
+branch = "dev"
+track = true
+timeout_seconds = 60
+lock_file = "./.blip-test.lock"
