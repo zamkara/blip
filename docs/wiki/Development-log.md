@@ -21,3 +21,10 @@ This log records repository work with explicit timestamps. It contains no creden
 - Removed per-project tracking, timeout, and lock settings from the public configuration.
 - Replaced per-project marker locks with one advisory lock shared by the global execution queue.
 - Reduced the configuration example to one project header, one executable file path, and one GitLab token field.
+
+## 2026-09-16T02:43:57+07:00
+
+- Corrected the one-command installation path for devices that still contain the obsolete project-array configuration.
+- Added automatic detection of the legacy **[[projects]]** schema, timestamped backup creation, and current-schema setup without requiring an extra installer flag.
+- Kept valid existing configurations untouched and retained explicit **BLIP_RECONFIGURE=1** behavior for intentional replacement of other configurations.
+- Updated the README and installation wiki to describe the exact upgrade behavior.

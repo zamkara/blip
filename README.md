@@ -41,7 +41,7 @@ The first run asks for:
 2. The absolute path to the executable script file.
 3. A GitLab Signing token, or a legacy Secret token when no Signing token is supplied.
 
-Later runs update the binary and preserve **/etc/blip/blip.toml**. Full options are documented in [Installation](docs/wiki/Installation.md).
+Later runs update the binary and preserve a valid **/etc/blip/blip.toml**. If the installer finds the obsolete **[[projects]]** schema, the same copy-paste command backs it up and starts the current configuration prompt automatically. Full options are documented in [Installation](docs/wiki/Installation.md).
 
 ## GitLab webhook
 
