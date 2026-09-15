@@ -18,6 +18,34 @@ This repository contains the Phase 1 MVP:
 
 REST management API, notifications, and a dashboard are intentionally deferred.
 
+## Deployment flow
+
+The intended GitLab flow is:
+
+```text
+feature branch → merge request → dev → GitLab Push Hook → Blip queue → deploy executable
+```
+
+For the self-build test environment, the operational files live outside this repository. The external deploy executable updates an isolated checkout, runs the test suite, and writes the release result to `/home/zam/Desktop/blip-build`. This repository itself does not contain production secrets, webhook credentials, or operational installer state.
+
+## Webhook endpoint
+
+Each configured project is exposed at:
+
+```text
+POST /webhook/<project-name>
+```
+
+The server responds with `202 Accepted` after authentication and rule matching succeed. Non-matching events return `204 No Content`; unknown projects return `404`; invalid authentication returns `401`.
+
+## Execution behavior
+
+Deployments are placed in a bounded queue and processed by one worker. A lock file prevents overlap for the configured project. With tracking disabled, the executable is still launched but its output is not recorded. With tracking enabled, Blip records status, exit code, duration, and combined output in JSONL history. A configured timeout limits tracked execution.
+
+## Configuration rules
+
+Project names identify webhook paths and must be unique. `event` and `branch` are optional filters. For GitLab push events, configure `event = "push"` and use the branch name such as `dev`; GitLab's `Push Hook` header is normalized by Blip. A project must define either the provider-specific signing credential or the legacy secret credential.
+
 ## Build
 
 Requirements: Rust stable and Cargo.
