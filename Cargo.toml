@@ -2,8 +2,8 @@
 name = "blip"
 version = "0.1.0"
 edition = "2021"
-description = "Self-hosted multi-provider CI/CD webhook deploy server"
-license = "MIT"
+description = "Self-hosted GitLab webhook deployment queue"
+license-file = "LICENSE"
 
 [dependencies]
 anyhow = "1"
@@ -11,9 +11,10 @@ axum = "0.7"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
+fs2 = "0.4"
 hmac = "0.12"
-hex = "0.4"
-http = "1"
+libc = "0.2"
+rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -21,4 +22,3 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-

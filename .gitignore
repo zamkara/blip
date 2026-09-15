@@ -1,11 +1,11 @@
 /target/
 /blip.toml
 /blip-history.jsonl
+/blip.queue.lock
 *.jsonl
 *.log
 .env
 .env.*
 !.env.example
 sample/
-docs/
-scripts/
+*.swp
