@@ -7,6 +7,7 @@ use axum::{
     routing::post,
     Router,
 };
+use base64::Engine;
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use hmac::{Hmac, Mac};
@@ -54,11 +55,19 @@ fn default_bind() -> String {
 fn default_history() -> PathBuf {
     "blip-history.jsonl".into()
 }
+fn default_timestamp_tolerance() -> i64 {
+    300
+}
 #[derive(Clone, Deserialize)]
 struct Project {
     name: String,
     provider: Provider,
-    secret: String,
+    #[serde(default)]
+    secret: Option<String>,
+    #[serde(default)]
+    signing_token: Option<String>,
+    #[serde(default = "default_timestamp_tolerance")]
+    timestamp_tolerance_seconds: i64,
     script: PathBuf,
     #[serde(default)]
     event: Option<String>,
@@ -117,8 +126,8 @@ fn load(path: &FsPath) -> Result<Config> {
         std::fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
     let cfg: Config = toml::from_str(&text).context("parse TOML")?;
     for p in &cfg.projects {
-        if p.name.is_empty() || p.secret.is_empty() {
-            anyhow::bail!("project name and secret are required")
+        if p.name.is_empty() || (p.secret.is_none() && p.signing_token.is_none()) {
+            anyhow::bail!("project name and either secret or signing_token are required")
         }
     }
     Ok(cfg)
@@ -206,11 +215,16 @@ fn branch_name(p: &Provider, b: &[u8]) -> Option<String> {
     Some(r?.to_string())
 }
 fn verify(p: &Project, h: &HeaderMap, body: &[u8]) -> bool {
+    if p.provider == Provider::Gitlab {
+        if let Some(signature) = h.get("webhook-signature").and_then(|v| v.to_str().ok()) {
+            return verify_gitlab_signing(p, h, body, signature);
+        }
+        return p.secret.as_deref().is_some_and(|secret| {
+            h.get("x-gitlab-token").and_then(|v| v.to_str().ok()) == Some(secret)
+        });
+    }
     match p.provider {
-        Provider::Gitlab => h
-            .get("x-gitlab-token")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v == p.secret),
+        Provider::Gitlab => false,
         _ => {
             let Some(sig) = h
                 .get("x-hub-signature-256")
@@ -219,7 +233,10 @@ fn verify(p: &Project, h: &HeaderMap, body: &[u8]) -> bool {
             else {
                 return false;
             };
-            let Ok(mut mac) = HmacSha256::new_from_slice(p.secret.as_bytes()) else {
+            let Some(secret) = p.secret.as_deref() else {
+                return false;
+            };
+            let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) else {
                 return false;
             };
             mac.update(body);
@@ -227,6 +244,44 @@ fn verify(p: &Project, h: &HeaderMap, body: &[u8]) -> bool {
             sig.trim_start_matches("sha256=") == expected
         }
     }
+}
+fn verify_gitlab_signing(p: &Project, h: &HeaderMap, body: &[u8], received: &str) -> bool {
+    let (Some(token), Some(id), Some(timestamp)) = (
+        p.signing_token.as_deref(),
+        h.get("webhook-id").and_then(|v| v.to_str().ok()),
+        h.get("webhook-timestamp").and_then(|v| v.to_str().ok()),
+    ) else {
+        return false;
+    };
+    let Ok(ts) = timestamp.parse::<i64>() else {
+        return false;
+    };
+    if (Utc::now().timestamp() - ts).abs() > p.timestamp_tolerance_seconds {
+        return false;
+    }
+    let Some(encoded_key) = token.strip_prefix("whsec_") else {
+        return false;
+    };
+    let Ok(key) = base64::engine::general_purpose::STANDARD.decode(encoded_key) else {
+        return false;
+    };
+    let Ok(mut mac) = HmacSha256::new_from_slice(&key) else {
+        return false;
+    };
+    mac.update(format!("{}.{}.{}", id, timestamp, String::from_utf8_lossy(body)).as_bytes());
+    let expected = format!(
+        "v1,{}",
+        base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+    );
+    received
+        .split_whitespace()
+        .any(|candidate| constant_time_eq(candidate.as_bytes(), expected.as_bytes()))
+}
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 async fn deploy(p: Project, _body: Vec<u8>, history: &FsPath) -> Result<()> {
     let lock = p

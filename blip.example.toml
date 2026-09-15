@@ -4,7 +4,8 @@ history_file = "/var/lib/blip/history.jsonl"
 [[projects]]
 name = "my-app"
 provider = "gitlab" # gitlab, github, gitea, or codeberg
-secret = "replace-with-a-unique-secret"
+signing_token = "whsec_replace-with-gitlab-signing-token"
+# secret = "optional-legacy-secret-token"
 script = "/srv/my-app/deploy"
 event = "push"
 branch = "develop"

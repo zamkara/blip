@@ -11,7 +11,7 @@ cp blip.local.example.toml blip.toml
 chmod +x scripts/test-deploy.sh
 ```
 
-Edit `blip.toml`, ganti `secret` dengan secret acak yang sama persis dengan Secret Token webhook GitLab.
+Edit `blip.toml`, isi `signing_token` dengan token GitLab yang diawali `whsec_`. Token ini hanya ditampilkan sekali. `secret` bersifat opsional sebagai fallback kompatibilitas.
 
 Validasi dan build:
 
@@ -49,8 +49,11 @@ Server mendengarkan `127.0.0.1:8080`. Jika GitLab tidak berada di device yang sa
 
 Pada GitLab: **Settings → Webhooks**.
 
+Referensi resmi: [GitLab Webhooks](https://docs.gitlab.com/user/project/integrations/webhooks/).
+
 - URL: `http://HOST-ATAU-TUNNEL:8080/webhook/blip-test`
-- Secret token: isi secret yang sama dengan `blip.toml`
+- Signing token: isi token `whsec_...` yang sama dengan `blip.toml`
+- Secret token: kosongkan untuk signing token; boleh diisi sebagai fallback
 - Trigger: centang **Push events**
 - SSL verification: aktifkan bila memakai HTTPS
 
@@ -65,11 +68,11 @@ cat .blip-test-deploy.log
 cargo run -- --config blip.toml history blip-test
 ```
 
-Harus ada satu eksekusi deploy setelah push ke `dev`. Untuk uji secret salah, gunakan **Test** dengan secret berbeda; respons harus `401 invalid webhook secret`.
+Harus ada satu eksekusi deploy setelah push ke `dev`. Untuk uji token salah, gunakan **Test** dengan signing token berbeda; respons harus `401 invalid webhook secret`. Timestamp webhook yang lebih tua dari 5 menit juga ditolak.
 
 ## Troubleshooting
 
 - `connection refused`: proses Blip belum berjalan atau port tidak dapat dijangkau.
-- `401`: Secret Token GitLab dan `secret` lokal berbeda.
+- `401`: signing token GitLab dan `signing_token` lokal berbeda.
 - `204 ignored`: payload bukan branch `dev`; periksa konfigurasi atau event webhook.
 - Tidak ada history: pastikan `scripts/test-deploy.sh` executable dan path script benar.
