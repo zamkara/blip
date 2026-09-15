@@ -78,7 +78,7 @@ if [[ "$missing_build_tool" -eq 1 ]]; then
   install_build_dependencies
 fi
 
-for command_name in getent install runuser systemctl; do
+for command_name in getent grep install runuser systemctl; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command is missing: $command_name"
 done
 
@@ -171,7 +171,20 @@ prompt_value() {
   printf -v "$variable_name" '%s' "$current_value"
 }
 
-if [[ ! -f "$BLIP_CONFIG_PATH" || "${BLIP_RECONFIGURE:-0}" == "1" ]]; then
+configure_required=0
+if [[ ! -f "$BLIP_CONFIG_PATH" ]]; then
+  configure_required=1
+elif [[ "${BLIP_RECONFIGURE:-0}" == "1" ]]; then
+  log "configuration replacement requested"
+  configure_required=1
+elif grep -Eq '^[[:space:]]*\[\[projects\]\][[:space:]]*(#.*)?$' "$BLIP_CONFIG_PATH"; then
+  log "legacy project-array configuration detected; it will be backed up and replaced"
+  configure_required=1
+else
+  log "preserving existing configuration: $BLIP_CONFIG_PATH"
+fi
+
+if [[ "$configure_required" -eq 1 ]]; then
   project_key="${BLIP_PROJECT_KEY:-}"
   deploy_script="${BLIP_SCRIPT:-}"
   signing_token="${BLIP_SIGNING_TOKEN:-}"
@@ -208,13 +221,11 @@ if [[ ! -f "$BLIP_CONFIG_PATH" || "${BLIP_RECONFIGURE:-0}" == "1" ]]; then
     project_command+=(--secret-token "$secret_token")
   fi
   "${project_command[@]}"
-else
-  log "preserving existing configuration: $BLIP_CONFIG_PATH"
 fi
 
 log "validating configuration"
 if ! "$BLIP_BINARY_PATH" --config "$BLIP_CONFIG_PATH" config validate; then
-  fail "configuration is incompatible or invalid; fix it or rerun with BLIP_RECONFIGURE=1"
+  fail "configuration is invalid; fix it or rerun with BLIP_RECONFIGURE=1 to replace it"
 fi
 
 "$BLIP_BINARY_PATH" --config "$BLIP_CONFIG_PATH" service install --user "$service_user"
