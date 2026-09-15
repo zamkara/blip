@@ -22,6 +22,8 @@ The first run asks only for:
 
 Event and branch selection stay in GitLab.
 
+The same command also handles installations created with the obsolete **[[projects]]** schema. It detects that schema, saves the old file as a timestamped backup, and opens the current configuration prompt. No migration flag is required.
+
 ## Non-interactive setup
 
 ~~~bash
@@ -74,7 +76,7 @@ Run the same installer command. It:
 1. Refuses a dirty or mismatched source checkout.
 2. Fetches and fast-forwards the selected branch.
 3. Builds and replaces the binary.
-4. Preserves **/etc/blip/blip.toml**.
+4. Preserves a valid **/etc/blip/blip.toml**, or backs up and replaces the obsolete project-array schema.
 5. Validates configuration and restarts the service.
 
 Set **BLIP_RECONFIGURE=1** only when intentionally replacing configuration. The installer writes a timestamped backup first.
@@ -124,9 +126,9 @@ The final catch-all rule is required. See the [official Cloudflare Tunnel config
 
 Set **BLIP_USER** to the account that owns the Rust toolchain. The installer runs Cargo and rustup with that account's home and PATH.
 
-### Validate reports an old-schema parse error
+### Replace another invalid configuration
 
-Migrate the project array to the keyed table described in [Configuration](Configuration.md), then validate before restarting.
+The installer migrates the obsolete **[[projects]]** shape automatically. For another invalid configuration, correct the file manually or set **BLIP_RECONFIGURE=1** to create a timestamped backup and enter the configuration again.
 
 ### Webhook returns 202 but nothing changed
 
