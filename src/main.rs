@@ -1,353 +1,339 @@
-use anyhow::{Context, Result};
-use axum::{
-    body::Bytes,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
-    routing::post,
-    Router,
-};
-use base64::Engine;
-use chrono::Utc;
-use clap::{Parser, Subcommand};
-use hmac::{Hmac, Mac};
-use serde::{Deserialize, Serialize};
-use sha2::Sha256;
-use std::{
-    path::{Path as FsPath, PathBuf},
-    process::Stdio,
-    sync::Arc,
-};
-use tokio::{
-    process::Command,
-    sync::mpsc,
-    time::{timeout, Duration},
-};
+mod config;
+mod runtime;
+mod system;
 
-type HmacSha256 = Hmac<Sha256>;
+use anyhow::{Context, Result};
+use clap::{Args, Parser, Subcommand};
+use config::{GitlabTemplate, Project};
+use std::{
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 
 #[derive(Parser)]
-#[command(name = "blip", about = "Self-hosted webhook deploy server")]
+#[command(name = "blip", version, about = "Self-hosted webhook deployment queue")]
 struct Cli {
-    #[arg(short, long, default_value = "blip.toml")]
-    config: PathBuf,
+    #[arg(short, long, global = true, value_name = "FILE")]
+    config: Option<PathBuf>,
     #[command(subcommand)]
     command: CommandKind,
 }
+
 #[derive(Subcommand)]
 enum CommandKind {
     Serve,
-    Validate,
-    History { project: Option<String> },
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+    History(HistoryArgs),
+    Logs(LogsArgs),
+    Queue,
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
 }
 
-#[derive(Clone, Deserialize)]
-struct Config {
-    #[serde(default = "default_bind")]
-    bind: String,
-    #[serde(default = "default_history")]
-    history_file: PathBuf,
-    projects: Vec<Project>,
+#[derive(Subcommand)]
+enum ConfigCommand {
+    Path,
+    Show {
+        #[arg(long)]
+        show_secrets: bool,
+    },
+    Validate,
+    Set(ConfigSetArgs),
 }
-fn default_bind() -> String {
-    "0.0.0.0:8080".into()
+
+#[derive(Args)]
+struct ConfigSetArgs {
+    #[arg(long, value_name = "ADDRESS")]
+    bind: Option<String>,
+    #[arg(long, value_name = "FILE")]
+    history_file: Option<PathBuf>,
 }
-fn default_history() -> PathBuf {
-    "blip-history.jsonl".into()
+
+#[derive(Subcommand)]
+enum ProjectCommand {
+    List,
+    Add(ProjectAddArgs),
+    Remove {
+        key: String,
+        #[arg(long)]
+        yes: bool,
+    },
 }
-fn default_timestamp_tolerance() -> i64 {
-    300
-}
-#[derive(Clone, Deserialize)]
-struct Project {
-    name: String,
-    provider: Provider,
-    #[serde(default)]
-    secret: Option<String>,
-    #[serde(default)]
-    signing_token: Option<String>,
-    #[serde(default = "default_timestamp_tolerance")]
-    timestamp_tolerance_seconds: i64,
+
+#[derive(Args)]
+struct ProjectAddArgs {
+    #[arg(long)]
+    key: String,
+    #[arg(long, value_name = "FILE")]
     script: PathBuf,
-    #[serde(default)]
-    event: Option<String>,
-    #[serde(default)]
-    branch: Option<String>,
-    #[serde(default)]
-    track: bool,
-    #[serde(default)]
-    timeout_seconds: Option<u64>,
-    #[serde(default)]
-    lock_file: Option<PathBuf>,
+    #[arg(long, conflicts_with = "secret_token")]
+    signing_token: Option<String>,
+    #[arg(long, conflicts_with = "signing_token")]
+    secret_token: Option<String>,
+    #[arg(long, default_value_t = 300)]
+    timestamp_tolerance_seconds: i64,
+    #[arg(long)]
+    replace: bool,
 }
-#[derive(Clone, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-enum Provider {
-    Gitlab,
-    Github,
-    Gitea,
-    Codeberg,
+
+#[derive(Args)]
+struct HistoryArgs {
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long, value_parser = ["success", "failure"])]
+    status: Option<String>,
+    #[arg(long)]
+    limit: Option<usize>,
 }
-#[derive(Serialize)]
-struct Record {
-    timestamp: String,
-    project: String,
-    status: String,
-    duration_ms: u128,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<String>,
+
+#[derive(Args)]
+struct LogsArgs {
+    #[arg(short = 'n', long, default_value_t = 100)]
+    lines: usize,
+    #[arg(short, long)]
+    follow: bool,
+    #[arg(long)]
+    since: Option<String>,
 }
-#[derive(Clone)]
-struct App {
-    config: Config,
-    tx: mpsc::Sender<(Project, Vec<u8>)>,
+
+#[derive(Subcommand)]
+enum ServiceCommand {
+    Install {
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        no_start: bool,
+    },
+    Uninstall {
+        #[arg(long)]
+        yes: bool,
+    },
+    Status,
+    Start,
+    Stop,
+    Restart,
+    Enable,
+    Disable,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
-    let cfg = load(&cli.config)?;
+    let config_path = config::resolve_path(cli.config.clone());
+
     match cli.command {
-        CommandKind::Validate => {
-            println!("configuration valid: {} project(s)", cfg.projects.len());
-        }
-        CommandKind::History { project } => {
-            print_history(&cfg.history_file, project.as_deref()).await?
-        }
-        CommandKind::Serve => serve(cfg).await?,
-    }
-    Ok(())
-}
-fn load(path: &FsPath) -> Result<Config> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
-    let cfg: Config = toml::from_str(&text).context("parse TOML")?;
-    for p in &cfg.projects {
-        if p.name.is_empty() || (p.secret.is_none() && p.signing_token.is_none()) {
-            anyhow::bail!("project name and either secret or signing_token are required")
-        }
-    }
-    Ok(cfg)
-}
-async fn serve(cfg: Config) -> Result<()> {
-    let (tx, mut rx) = mpsc::channel::<(Project, Vec<u8>)>(128);
-    let history = cfg.history_file.clone();
-    tokio::spawn(async move {
-        while let Some((p, body)) = rx.recv().await {
-            if let Err(e) = deploy(p, body, &history).await {
-                tracing::error!(%e, "deployment failed")
-            }
-        }
-    });
-    let state = App {
-        config: cfg.clone(),
-        tx,
-    };
-    let app = Router::new()
-        .route("/webhook/:project", post(webhook))
-        .with_state(Arc::new(state));
-    let listener = tokio::net::TcpListener::bind(&cfg.bind).await?;
-    println!("blip listening on {}", cfg.bind);
-    axum::serve(listener, app).await?;
-    Ok(())
-}
-async fn webhook(
-    State(state): State<Arc<App>>,
-    Path(name): Path<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    let Some(project) = state
-        .config
-        .projects
-        .iter()
-        .find(|p| p.name == name)
-        .cloned()
-    else {
-        return (StatusCode::NOT_FOUND, "unknown project");
-    };
-    if !verify(&project, &headers, &body) {
-        return (StatusCode::UNAUTHORIZED, "invalid webhook secret");
-    }
-    let event = event_name(&project.provider, &headers);
-    let branch = branch_name(&project.provider, &body);
-    if project
-        .event
-        .as_deref()
-        .is_some_and(|x| Some(x) != event.as_deref())
-        || project
-            .branch
-            .as_deref()
-            .is_some_and(|x| Some(x) != branch.as_deref())
-    {
-        return (StatusCode::NO_CONTENT, "ignored");
-    }
-    match state.tx.try_send((project, body.to_vec())) {
-        Ok(_) => (StatusCode::ACCEPTED, "queued"),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "queue full"),
-    }
-}
-fn event_name(p: &Provider, h: &HeaderMap) -> Option<String> {
-    let key = match p {
-        Provider::Gitlab => "x-gitlab-event",
-        Provider::Github => "x-github-event",
-        _ => "x-gitea-event",
-    };
-    let value = h
-        .get(key)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_lowercase())?;
-    Some(if value == "push hook" {
-        "push".into()
-    } else {
-        value
-    })
-}
-fn branch_name(p: &Provider, b: &[u8]) -> Option<String> {
-    let v: serde_json::Value = serde_json::from_slice(b).ok()?;
-    let r = match p {
-        Provider::Github => v["ref"].as_str()?.strip_prefix("refs/heads/"),
-        _ => v["ref"].as_str()?.strip_prefix("refs/heads/"),
-    };
-    Some(r?.to_string())
-}
-fn verify(p: &Project, h: &HeaderMap, body: &[u8]) -> bool {
-    if p.provider == Provider::Gitlab {
-        if let Some(signature) = h.get("webhook-signature").and_then(|v| v.to_str().ok()) {
-            return verify_gitlab_signing(p, h, body, signature);
-        }
-        return p.secret.as_deref().is_some_and(|secret| {
-            h.get("x-gitlab-token").and_then(|v| v.to_str().ok()) == Some(secret)
-        });
-    }
-    match p.provider {
-        Provider::Gitlab => false,
-        _ => {
-            let Some(sig) = h
-                .get("x-hub-signature-256")
-                .or_else(|| h.get("x-gitea-signature"))
-                .and_then(|v| v.to_str().ok())
-            else {
-                return false;
-            };
-            let Some(secret) = p.secret.as_deref() else {
-                return false;
-            };
-            let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) else {
-                return false;
-            };
-            mac.update(body);
-            let expected = hex::encode(mac.finalize().into_bytes());
-            sig.trim_start_matches("sha256=") == expected
-        }
-    }
-}
-fn verify_gitlab_signing(p: &Project, h: &HeaderMap, body: &[u8], received: &str) -> bool {
-    let (Some(token), Some(id), Some(timestamp)) = (
-        p.signing_token.as_deref(),
-        h.get("webhook-id").and_then(|v| v.to_str().ok()),
-        h.get("webhook-timestamp").and_then(|v| v.to_str().ok()),
-    ) else {
-        return false;
-    };
-    let Ok(ts) = timestamp.parse::<i64>() else {
-        return false;
-    };
-    if (Utc::now().timestamp() - ts).abs() > p.timestamp_tolerance_seconds {
-        return false;
-    }
-    let Some(encoded_key) = token.strip_prefix("whsec_") else {
-        return false;
-    };
-    let Ok(key) = base64::engine::general_purpose::STANDARD.decode(encoded_key) else {
-        return false;
-    };
-    let Ok(mut mac) = HmacSha256::new_from_slice(&key) else {
-        return false;
-    };
-    mac.update(format!("{}.{}.{}", id, timestamp, String::from_utf8_lossy(body)).as_bytes());
-    let expected = format!(
-        "v1,{}",
-        base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
-    );
-    received
-        .split_whitespace()
-        .any(|candidate| constant_time_eq(candidate.as_bytes(), expected.as_bytes()))
-}
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-async fn deploy(p: Project, _body: Vec<u8>, history: &FsPath) -> Result<()> {
-    let lock = p
-        .lock_file
-        .clone()
-        .unwrap_or_else(|| p.script.with_extension("lock"));
-    let lock_guard = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock);
-    if lock_guard.is_err() {
-        tracing::warn!(project=%p.name, "deployment skipped: lock exists");
-        return Ok(());
-    }
-    let start = std::time::Instant::now();
-    let mut cmd = Command::new(&p.script);
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let result = if let Some(sec) = p.timeout_seconds {
-        timeout(Duration::from_secs(sec), cmd.output()).await??
-    } else {
-        cmd.output().await?
-    };
-    let success = result.status.success();
-    let output = if p.track {
-        Some(format!(
-            "{}{}",
-            String::from_utf8_lossy(&result.stdout),
-            String::from_utf8_lossy(&result.stderr)
-        ))
-    } else {
-        None
-    };
-    let rec = Record {
-        timestamp: Utc::now().to_rfc3339(),
-        project: p.name,
-        status: if success {
-            "success".into()
-        } else {
-            "failure".into()
-        },
-        duration_ms: start.elapsed().as_millis(),
-        exit_code: result.status.code(),
-        output,
-    };
-    let line = serde_json::to_string(&rec)? + "\n";
-    tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(history)
-        .await?
-        .write_all(line.as_bytes())
-        .await?;
-    let _ = std::fs::remove_file(lock);
-    Ok(())
-}
-async fn print_history(path: &FsPath, project: Option<&str>) -> Result<()> {
-    if let Ok(text) = tokio::fs::read_to_string(path).await {
-        for line in text.lines() {
-            if project
-                .map(|p| line.contains(&format!("\"project\":\"{}\"", p)))
-                .unwrap_or(true)
+        CommandKind::Serve => runtime::serve(config::load(&config_path)?).await?,
+        CommandKind::Config { command } => handle_config(command, &config_path)?,
+        CommandKind::Project { command } => handle_project(command, &config_path)?,
+        CommandKind::History(arguments) => {
+            let config = config::load(&config_path)?;
+            for line in runtime::read_history(
+                &config.history_file,
+                arguments.project.as_deref(),
+                arguments.status.as_deref(),
+                arguments.limit,
+            )
+            .await?
             {
-                println!("{}", line);
+                println!("{line}");
             }
+        }
+        CommandKind::Logs(arguments) => {
+            system::logs(
+                arguments.lines,
+                arguments.follow,
+                arguments.since.as_deref(),
+            )?;
+        }
+        CommandKind::Queue => {
+            let config = config::load(&config_path)?;
+            let lock = runtime::queue_lock_path(&config.history_file);
+            println!("capacity: {}", runtime::QUEUE_CAPACITY);
+            println!("lock: {}", lock.display());
+            println!("state: {}", runtime::queue_state(&config.history_file)?);
+        }
+        CommandKind::Service { command } => handle_service(command, &config_path)?,
+    }
+
+    Ok(())
+}
+
+fn handle_config(command: ConfigCommand, path: &Path) -> Result<()> {
+    match command {
+        ConfigCommand::Path => println!("{}", path.display()),
+        ConfigCommand::Show { show_secrets } => {
+            let config = config::load(path)?;
+            print!("{}", config::render(&config, show_secrets));
+        }
+        ConfigCommand::Validate => {
+            let config = config::load(path)?;
+            println!("configuration valid: {} project(s)", config.projects.len());
+        }
+        ConfigCommand::Set(arguments) => {
+            elevate_for_system_config(path)?;
+            if arguments.bind.is_none() && arguments.history_file.is_none() {
+                anyhow::bail!("set at least one of --bind or --history-file");
+            }
+            let mut config = config::load_or_default(path)?;
+            if let Some(bind) = arguments.bind {
+                config.bind = bind;
+            }
+            if let Some(history_file) = arguments.history_file {
+                config.history_file = history_file;
+            }
+            config::save(path, &config)?;
+            println!("updated {}", path.display());
         }
     }
     Ok(())
 }
-use tokio::io::AsyncWriteExt;
+
+fn handle_project(command: ProjectCommand, path: &Path) -> Result<()> {
+    match command {
+        ProjectCommand::List => {
+            let config = config::load(path)?;
+            for (key, project) in config.projects {
+                println!("{key}\tgitlab\t{}", project.script.display());
+            }
+        }
+        ProjectCommand::Add(mut arguments) => {
+            elevate_for_system_config(path)?;
+            let mut config = config::load_or_default(path)?;
+            if config.projects.contains_key(&arguments.key) && !arguments.replace {
+                anyhow::bail!(
+                    "project {:?} already exists; pass --replace to update it",
+                    arguments.key
+                );
+            }
+
+            let (signing_token, secret_token) = credentials(&mut arguments)?;
+            config.projects.insert(
+                arguments.key.clone(),
+                Project {
+                    script: arguments.script,
+                    gitlab: GitlabTemplate {
+                        signing_token,
+                        secret_token,
+                        timestamp_tolerance_seconds: arguments.timestamp_tolerance_seconds,
+                    },
+                },
+            );
+            config::save(path, &config)?;
+            println!("saved project {}", arguments.key);
+        }
+        ProjectCommand::Remove { key, yes } => {
+            elevate_for_system_config(path)?;
+            if !yes && !confirm(&format!("remove project {key:?}?"))? {
+                println!("cancelled");
+                return Ok(());
+            }
+            let mut config = config::load(path)?;
+            if config.projects.remove(&key).is_none() {
+                anyhow::bail!("unknown project: {key}");
+            }
+            config::save(path, &config)?;
+            println!("removed project {key}");
+        }
+    }
+    Ok(())
+}
+
+fn credentials(arguments: &mut ProjectAddArgs) -> Result<(Option<String>, Option<String>)> {
+    if arguments.signing_token.is_some() || arguments.secret_token.is_some() {
+        return Ok((
+            arguments.signing_token.take(),
+            arguments.secret_token.take(),
+        ));
+    }
+
+    let signing_token =
+        rpassword::prompt_password("GitLab Signing token (leave empty for Secret token): ")?;
+    if !signing_token.is_empty() {
+        return Ok((Some(signing_token), None));
+    }
+    let secret_token = rpassword::prompt_password("GitLab Secret token: ")?;
+    if secret_token.is_empty() {
+        anyhow::bail!("a GitLab Signing token or Secret token is required");
+    }
+    Ok((None, Some(secret_token)))
+}
+
+fn handle_service(command: ServiceCommand, config_path: &Path) -> Result<()> {
+    match command {
+        ServiceCommand::Install { user, no_start } => {
+            if !system::is_root() {
+                system::elevate_self()?;
+            }
+            config::load(config_path)?;
+            let user = system::service_user(user)?;
+            system::install_service(config_path, &user, !no_start)?;
+            println!("installed blip.service for {user}");
+        }
+        ServiceCommand::Uninstall { yes } => {
+            if !system::is_root() {
+                system::elevate_self()?;
+            }
+            if !yes && !confirm("uninstall blip.service?")? {
+                println!("cancelled");
+                return Ok(());
+            }
+            system::uninstall_service()?;
+            println!("uninstalled blip.service; configuration and data were preserved");
+        }
+        ServiceCommand::Status => system::service_action("status")?,
+        ServiceCommand::Start => system::service_action("start")?,
+        ServiceCommand::Stop => system::service_action("stop")?,
+        ServiceCommand::Restart => system::service_action("restart")?,
+        ServiceCommand::Enable => system::service_action("enable")?,
+        ServiceCommand::Disable => system::service_action("disable")?,
+    }
+    Ok(())
+}
+
+fn elevate_for_system_config(path: &Path) -> Result<()> {
+    if path.starts_with("/etc") && !system::is_root() {
+        system::elevate_self()?;
+    }
+    Ok(())
+}
+
+fn confirm(question: &str) -> Result<bool> {
+    print!("{question} [y/N] ");
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .context("read confirmation")?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_side_rules_are_rejected_from_configuration() {
+        let result = toml::from_str::<config::Config>(
+            r#"
+                [projects.example-app]
+                script = "/bin/true"
+                event = "push"
+                gitlab.secret_token = "test-secret"
+            "#,
+        );
+        assert!(result.is_err());
+    }
+}

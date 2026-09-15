@@ -1,0 +1,138 @@
+# Product direction and roadmap
+
+## Purpose
+
+Blip replaces manual SSH, pull, and deploy work for operators running many applications on one server. Hosted services such as GitLab CI/CD, GitHub Actions, and Blacksmith can be excessive for a webhook-triggered local deployment; GitLab's 400-minute monthly free-tier allowance was the original concrete constraint.
+
+The product remains a native Rust systemd service with one centralized configuration and a full management CLI. It is not a hosted runner, workflow language, billing platform, or Jenkins replacement.
+
+## Design decisions
+
+The current architecture follows these decisions:
+
+- The project TOML key is the endpoint identity; no duplicate name.
+- Provider behavior is represented by a nested provider-specific template; no generic provider field.
+- GitLab is the first implemented template.
+- GitLab owns event and branch filtering through its webhook form; Blip does not duplicate those rules.
+- A project points to one executable file.
+- All accepted requests share one FIFO queue.
+- One advisory lock coordinates queue execution across Blip processes.
+- The HTTP request is asynchronous, but the worker waits for each script to preserve serial execution.
+- Basic result history is always recorded; stdout and stderr remain in service logs.
+
+## Current implementation
+
+- GitLab Signing token verification using Standard Webhooks.
+- Optional legacy GitLab Secret token compatibility.
+- Timestamp replay window for signed requests.
+- Keyed multi-project TOML configuration.
+- Absolute executable-file validation.
+- 128-entry in-memory queue and one worker.
+- One global advisory lock derived from the runtime directory.
+- Success/failure, duration, exit code, and spawn-error history.
+- CLI commands for serving, global configuration, project CRUD, filtered history, logs, queue inspection, and systemd management.
+- One combined installation and setup script for systemd.
+
+## Phase 1 — Complete the initial release
+
+### Provider templates
+
+The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as a separate nested TOML template with only fields required by that provider. Do not reintroduce a generic provider enum into public configuration.
+
+- GitHub: verify **X-Hub-Signature-256**.
+- Gitea: verify **X-Gitea-Signature** or its documented compatible header.
+- Codeberg: implement and test its Gitea-compatible contract.
+- Keep provider fixture tests isolated by template.
+
+### Queue reliability
+
+- Test FIFO order and exact queue capacity.
+- Add delivery-ID deduplication.
+- Decide whether waiting entries must survive restart.
+- Add graceful shutdown and queue drain.
+- Record queue rejection and lock wait duration.
+- Add execution timeout and cancellation without allowing the next job to overlap a surviving process.
+- Define retry policy without turning Blip into a workflow engine.
+
+### Execution and observability
+
+- Add opt-in detailed output capture without changing the minimal project schema.
+- Limit and redact captured output.
+- Add history rotation and retention.
+- Record signal exits and process-group failures.
+- Add health, readiness, and metrics endpoints.
+- Keep journald as the default stdout/stderr destination.
+
+### Management CLI completion
+
+- Add a dedicated project-edit command; replacement is currently handled by project add with **--replace**.
+- Add enable/disable state per project.
+- Select additional provider templates interactively when they are implemented.
+- Inspect configuration with credentials redacted.
+- Rotate credentials safely.
+- Add history filtering by time; project, result, and limit filters already exist.
+- Add service health details beyond systemd status.
+
+### Validation and security
+
+- Verify runtime read/execute permission as the configured service identity.
+- Validate bind and history destinations before startup.
+- Add request-size and rate limits.
+- Add per-project service identities or process sandboxing.
+- Add structured audit events without logging credentials.
+- Test signed-request edge cases, including multiple signatures and clock skew.
+
+## Phase 2 — Add-ons
+
+- Versioned REST management API in addition to the CLI.
+- Telegram, Discord, and other deployment notifications.
+- Durable retries and queue persistence if operational evidence justifies them.
+- Optional web dashboard only after API authentication and authorization are stable.
+
+## Test plan
+
+### Unit
+
+- Keyed TOML parsing and invalid project keys.
+- Script path, file type, and executable-mode validation.
+- Signing and Secret token verification.
+- Stale timestamp and altered-body rejection.
+- Global lock path and advisory lock behavior.
+- History serialization and project filtering.
+
+### Integration
+
+- HTTP 202, 401, 404, and queue-full 503 behavior.
+- FIFO execution across different projects.
+- Two Blip processes sharing one runtime lock.
+- Success, non-zero exit, and spawn failure.
+- Restart with queued work and repeated delivery IDs.
+
+### End to end
+
+1. Install from published documentation on a disposable systemd host.
+2. Route an example HTTPS hostname to loopback Blip.
+3. Configure GitLab Push events with the target-branch regex.
+4. Merge into the target branch.
+5. Verify one history record, one script run, the expected revision, and an identifiable artifact outside the source checkout.
+6. Repeat with an invalid token, wrong branch at GitLab, failing script, duplicate delivery, and service restart.
+
+## Acceptance criteria
+
+The initial release is complete when:
+
+1. Each implemented provider template passes official fixture-based signature tests.
+2. GitLab configuration contains no duplicated event or branch policy.
+3. Every authenticated request is either queued once or rejected with a documented status.
+4. No two scripts run concurrently, including across two Blip processes sharing the runtime directory.
+5. Every completed or failed start produces an accurate history record.
+6. The CLI safely manages keyed projects and redacts credentials.
+7. A fresh operator can install, configure, test, upgrade, diagnose, and remove Blip using the wiki alone.
+8. An end-to-end merge creates exactly one verifiable artifact from the intended revision.
+
+## Deferred scope
+
+- Hosted compute and compute-minute billing.
+- General workflow orchestration.
+- Web dashboard in the initial phase.
+- REST API and notifications in the initial phase.

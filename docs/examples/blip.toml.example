@@ -1,0 +1,3 @@
+[projects.example-app]
+script = "/srv/example-app/deploy.sh"
+gitlab.signing_token = "whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
