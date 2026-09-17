@@ -1,6 +1,6 @@
 # Development log
 
-This log records repository work with explicit timestamps. It contains no credentials, private hostnames, or machine-specific paths.
+This page preserves early public development summaries. Starting on 2026-09-17, the root **change.log** is the canonical detailed work record. Neither log may contain credentials, private hostnames, or machine-specific paths.
 
 ## 2026-09-16T01:52:34+07:00
 
@@ -28,3 +28,11 @@ This log records repository work with explicit timestamps. It contains no creden
 - Added automatic detection of the legacy **[[projects]]** schema, timestamped backup creation, and current-schema setup without requiring an extra installer flag.
 - Kept valid existing configurations untouched and retained explicit **BLIP_RECONFIGURE=1** behavior for intentional replacement of other configurations.
 - Updated the README and installation wiki to describe the exact upgrade behavior.
+
+## 2026-09-17T08:37:53+07:00
+
+- Implemented persistent GitLab delivery-ID deduplication with **webhook-id** and legacy **Idempotency-Key** support.
+- Added an atomically claimed JSONL registry beside runtime history without adding project configuration or another execution lock.
+- Added **202 duplicate**, malformed-ID handling, delivery-ID history correlation, and registry inspection through **blip queue**.
+- Added tests for concurrent claims, queued duplicates, completed duplicates, project scoping, and persistence across service reconstruction.
+- Updated the README, runtime architecture, GitLab guide, installation paths, security notes, and roadmap.

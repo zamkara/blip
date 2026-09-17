@@ -57,6 +57,12 @@ GitLab Signing tokens follow Standard Webhooks:
 
 GitLab may send multiple space-separated signatures; Blip accepts the request when any one matches. See the [official GitLab webhook documentation](https://docs.gitlab.com/user/project/integrations/webhooks/).
 
+## Delivery ID and retries
+
+GitLab sends a **webhook-id** that remains unchanged across retries. Blip records that ID before queueing the script. A repeated delivery receives **202 duplicate** and does not create another execution. For legacy deliveries without **webhook-id**, Blip accepts **Idempotency-Key**; when both headers are present, their values must match.
+
+The registry is persisted beside execution history, so restarting Blip does not make an accepted delivery new again. The delivery ID is also included in the corresponding history record for correlation with GitLab's Recent events page.
+
 ## Secret token compatibility
 
 For an existing webhook:
@@ -78,6 +84,8 @@ Use **Test → Push events** in GitLab.
 | Result | Meaning |
 | --- | --- |
 | **202 queued** | Authentication passed and the script entered the queue. |
+| **202 duplicate** | The same project and delivery ID were accepted previously; no new script run was queued. |
+| **400** | The delivery ID is missing, invalid, or conflicts with the legacy ID header. |
 | **401** | Token mismatch, malformed signing key, altered body, missing signing headers, or stale timestamp. |
 | **404** | URL project key does not exist in the TOML map. |
 | **503** | Queue capacity is exhausted. |
