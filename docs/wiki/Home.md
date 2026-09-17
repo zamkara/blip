@@ -16,9 +16,11 @@ This wiki describes the current GitLab-first MVP and the work still required. Ru
 
 ~~~text
 .
+├── AGENTS.md
 ├── Cargo.toml
 ├── LICENSE
 ├── README.md
+├── change.log
 ├── docs
 │   ├── examples
 │   │   └── blip.toml.example
@@ -29,7 +31,7 @@ This wiki describes the current GitLab-first MVP and the work still required. Ru
     └── main.rs
 ~~~
 
-The root contains only project metadata, the license, the primary README, and Rust source. Examples remain under **docs/examples**. The single installer remains under **docs**. Wiki pages remain under **docs/wiki**.
+The root contains project metadata, repository instructions, the canonical change log, the license, the primary README, and Rust source. Examples remain under **docs/examples**. The single installer remains under **docs**. Wiki pages remain under **docs/wiki**.
 
 ## Responsibility boundary
 

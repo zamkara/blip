@@ -29,6 +29,7 @@ The current architecture follows these decisions:
 - Absolute executable-file validation.
 - 128-entry in-memory queue and one worker.
 - One global advisory lock derived from the runtime directory.
+- Persistent GitLab delivery-ID deduplication using **webhook-id** with legacy **Idempotency-Key** fallback.
 - Success/failure, duration, exit code, and spawn-error history.
 - CLI commands for serving, global configuration, project CRUD, filtered history, logs, queue inspection, and systemd management.
 - One combined installation and setup script for systemd.
@@ -47,7 +48,6 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 ### Queue reliability
 
 - Test FIFO order and exact queue capacity.
-- Add delivery-ID deduplication.
 - Decide whether waiting entries must survive restart.
 - Add graceful shutdown and queue drain.
 - Record queue rejection and lock wait duration.
@@ -98,6 +98,7 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 - Signing and Secret token verification.
 - Stale timestamp and altered-body rejection.
 - Global lock path and advisory lock behavior.
+- Persistent and concurrent delivery-ID claim behavior.
 - History serialization and project filtering.
 
 ### Integration
@@ -106,7 +107,7 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 - FIFO execution across different projects.
 - Two Blip processes sharing one runtime lock.
 - Success, non-zero exit, and spawn failure.
-- Restart with queued work and repeated delivery IDs.
+- Restart with queued work; repeated delivery-ID behavior is covered by the current runtime tests.
 
 ### End to end
 

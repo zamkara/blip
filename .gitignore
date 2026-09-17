@@ -4,6 +4,7 @@
 /blip.queue.lock
 *.jsonl
 *.log
+!/change.log
 .env
 .env.*
 !.env.example

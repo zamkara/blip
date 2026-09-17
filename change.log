@@ -1,0 +1,172 @@
+BLIP CHANGE LOG
+===============
+
+Purpose
+-------
+This is the canonical chronological record of repository work. Every entry uses
+an RFC 3339 timestamp with seconds and the Asia/Jakarta UTC offset. Future work
+must append an entry before handoff, including the exact files changed, the
+validation performed, and whether the work is committed or pushed.
+
+2026-09-16T01:52:34+07:00
+---------------------------------
+Scope: Repository and documentation baseline
+
+- Audited the repository structure, runtime implementation, installer, Cargo
+  metadata, and public documentation.
+- Replaced test-specific installation material with one combined installation
+  and initial-configuration script.
+- Removed personal checkout paths, SSH-key assumptions, private hostnames,
+  desktop artifact paths, and test-only deployment instructions.
+- Reorganized examples under docs/examples and documentation under docs/wiki.
+- Installed the Almatera Incubator License as the repository license.
+
+Files recorded:
+- Cargo.toml
+- LICENSE
+- README.md
+- docs/install.sh
+- docs/examples/blip.toml.example
+- docs/wiki/Architecture.md
+- docs/wiki/Configuration.md
+- docs/wiki/Development-log.md
+- docs/wiki/GitLab.md
+- docs/wiki/Home.md
+- docs/wiki/Installation.md
+- docs/wiki/Roadmap.md
+- docs/wiki/Security.md
+
+2026-09-16T02:12:58+07:00
+---------------------------------
+Scope: Minimal project configuration and global queue locking
+
+- Replaced the project array with a keyed project map so the project identifier
+  appears only once.
+- Replaced the generic provider field with a GitLab-specific nested template.
+- Removed event, branch, tracking, timeout, and lock fields from project config.
+- Made GitLab responsible for event and branch filtering.
+- Replaced per-project marker locks with one advisory execution lock shared by
+  the global queue.
+- Expanded the binary CLI for configuration, project, history, log, queue, and
+  systemd service operations.
+
+Files recorded:
+- src/config.rs
+- src/main.rs
+- src/runtime.rs
+- src/system.rs
+- docs/examples/blip.toml.example
+- docs/wiki/Architecture.md
+- docs/wiki/Configuration.md
+- docs/wiki/Roadmap.md
+
+2026-09-16T02:43:57+07:00
+---------------------------------
+Scope: One-command legacy configuration migration
+
+- Corrected the README copy-and-paste installation path for hosts containing
+  the obsolete [[projects]] configuration schema.
+- Added automatic legacy-schema detection, timestamped backup creation, and
+  current-schema setup without requiring a second installation command.
+- Preserved valid existing configuration and retained BLIP_RECONFIGURE=1 for
+  intentional replacement of other invalid configurations.
+
+Files recorded:
+- README.md
+- docs/install.sh
+- docs/wiki/Development-log.md
+- docs/wiki/Installation.md
+
+2026-09-17T08:37:53+07:00
+---------------------------------
+Scope: Persistent GitLab delivery-ID deduplication
+Branch: feature/delivery-id-deduplication
+
+- Added webhook-id handling with Idempotency-Key fallback for legacy GitLab
+  deliveries.
+- Added an atomically claimed JSONL delivery registry beside runtime history.
+- Added HTTP 202 duplicate handling without scheduling a second script run.
+- Scoped delivery identities by project and persisted them across service
+  reconstruction.
+- Added delivery IDs to execution history and exposed the registry path through
+  blip queue.
+- Added tests for concurrent claims, queued duplicates, completed duplicates,
+  project scoping, and restart persistence.
+- Updated the roadmap by moving delivery-ID deduplication into the implemented
+  feature list.
+
+Files recorded:
+- README.md
+- docs/wiki/Architecture.md
+- docs/wiki/Development-log.md
+- docs/wiki/GitLab.md
+- docs/wiki/Installation.md
+- docs/wiki/Roadmap.md
+- docs/wiki/Security.md
+- src/main.rs
+- src/runtime.rs
+
+Validation recorded:
+- cargo fmt --all -- --check
+- cargo test --locked --all-targets: 13 passed
+- cargo clippy --locked --all-targets --all-features -- -D warnings
+- cargo build --locked --release
+- bash -n docs/install.sh
+- git diff --check
+
+State recorded:
+- Working tree changes were not committed or pushed at this timestamp.
+
+2026-09-17T08:41:59+07:00
+---------------------------------
+Scope: Repository continuity and contributor rules
+Branch: feature/delivery-id-deduplication
+
+- Established this file as the canonical timestamped work record.
+- Added repository-wide agent and contributor operating instructions covering
+  architecture, configuration boundaries, Git workflow, documentation layout,
+  security, installer behavior, testing, and handoff requirements.
+
+Files recorded:
+- .gitignore
+- AGENTS.md
+- change.log
+- README.md
+- docs/wiki/Development-log.md
+- docs/wiki/Home.md
+
+Validation recorded:
+- git diff --check
+- cargo fmt --all -- --check
+- cargo test --locked --all-targets: 13 passed
+- cargo clippy --locked --all-targets --all-features -- -D warnings
+- cargo build --locked --release
+- bash -n docs/install.sh
+- Repository identity scan found no personal path, private hostname, or real
+  credential; only documented synthetic whsec_AAAA... examples remain.
+
+State recorded:
+- Working tree changes were not committed or pushed at this timestamp.
+
+2026-09-17T08:46:11+07:00
+---------------------------------
+Scope: Local grouped commit preparation
+Branch: feature/delivery-id-deduplication
+
+- Prepared all delivery-deduplication, repository-governance, and documentation
+  changes for separate local commits by responsibility.
+- Kept the feature branch local; no push or merge was authorized for this batch.
+
+Commit groups recorded:
+- Runtime implementation: src/main.rs and src/runtime.rs.
+- Repository governance: .gitignore, AGENTS.md, and change.log.
+- Public documentation: README.md and all modified docs/wiki pages.
+
+Validation recorded:
+- git diff --check
+- Previous final feature gate remains valid: 13 tests passed, Clippy passed,
+  release build passed, formatting passed, and installer syntax passed.
+
+State recorded:
+- All working-tree files are scheduled for local commits only.
+- No push or merge is part of this operation.

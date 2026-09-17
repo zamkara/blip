@@ -158,8 +158,10 @@ async fn main() -> Result<()> {
         CommandKind::Queue => {
             let config = config::load(&config_path)?;
             let lock = runtime::queue_lock_path(&config.history_file);
+            let deliveries = runtime::delivery_file_path(&config.history_file);
             println!("capacity: {}", runtime::QUEUE_CAPACITY);
             println!("lock: {}", lock.display());
+            println!("deliveries: {}", deliveries.display());
             println!("state: {}", runtime::queue_state(&config.history_file)?);
         }
         CommandKind::Service { command } => handle_service(command, &config_path)?,
