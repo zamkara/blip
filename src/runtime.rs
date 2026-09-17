@@ -17,6 +17,8 @@ use sha2::Sha256;
 use std::{
     collections::BTreeMap,
     fs::File,
+    io::{Read, Seek, SeekFrom, Write},
+    os::unix::fs::OpenOptionsExt,
     path::{Path as FsPath, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -25,11 +27,14 @@ use tokio::{io::AsyncWriteExt, process::Command, sync::mpsc};
 
 type HmacSha256 = Hmac<Sha256>;
 pub const QUEUE_CAPACITY: usize = 128;
+const MAX_DELIVERY_ID_LENGTH: usize = 256;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Record {
     pub timestamp: String,
     pub project: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_id: Option<String>,
     pub status: String,
     pub duration_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,21 +43,36 @@ pub struct Record {
     pub error: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct DeliveryRecord {
+    accepted_at: String,
+    project: String,
+    delivery_id: String,
+}
+
+struct Job {
+    project_key: String,
+    project: Project,
+    delivery_id: String,
+}
+
 #[derive(Clone)]
 struct App {
     projects: Arc<BTreeMap<String, Project>>,
-    tx: mpsc::Sender<(String, Project)>,
+    tx: mpsc::Sender<Job>,
+    delivery_file: PathBuf,
 }
 
 pub async fn serve(config: Config) -> Result<()> {
-    let (tx, mut rx) = mpsc::channel::<(String, Project)>(QUEUE_CAPACITY);
+    let (tx, mut rx) = mpsc::channel::<Job>(QUEUE_CAPACITY);
     let history_file = config.history_file.clone();
     let queue_lock_file = queue_lock_path(&history_file);
+    let delivery_file = delivery_file_path(&history_file);
 
     tokio::spawn(async move {
-        while let Some((key, project)) = rx.recv().await {
-            if let Err(error) = deploy(&key, &project, &history_file, &queue_lock_file).await {
-                tracing::error!(project = %key, %error, "deployment failed");
+        while let Some(job) = rx.recv().await {
+            if let Err(error) = deploy(&job, &history_file, &queue_lock_file).await {
+                tracing::error!(project = %job.project_key, delivery_id = %job.delivery_id, %error, "deployment failed");
             }
         }
     });
@@ -60,6 +80,7 @@ pub async fn serve(config: Config) -> Result<()> {
     let state = App {
         projects: Arc::new(config.projects),
         tx,
+        delivery_file,
     };
     let app = Router::new()
         .route("/webhook/:project", post(webhook))
@@ -87,10 +108,69 @@ async fn webhook(
         );
     }
 
-    match state.tx.try_send((key, project)) {
-        Ok(()) => (StatusCode::ACCEPTED, "queued"),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "queue full"),
+    let delivery_id = match gitlab_delivery_id(&headers) {
+        Ok(delivery_id) => delivery_id,
+        Err(message) => return (StatusCode::BAD_REQUEST, message),
+    };
+
+    let permit = match state.tx.clone().try_reserve_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return match delivery_exists(&state.delivery_file, &key, &delivery_id).await {
+                Ok(true) => (StatusCode::ACCEPTED, "duplicate"),
+                Ok(false) => (StatusCode::SERVICE_UNAVAILABLE, "queue full"),
+                Err(error) => {
+                    tracing::error!(project = %key, %delivery_id, %error, "delivery registry unavailable");
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "delivery registry unavailable",
+                    )
+                }
+            };
+        }
+    };
+
+    match claim_delivery(&state.delivery_file, &key, &delivery_id).await {
+        Ok(true) => {
+            permit.send(Job {
+                project_key: key,
+                project,
+                delivery_id,
+            });
+            (StatusCode::ACCEPTED, "queued")
+        }
+        Ok(false) => (StatusCode::ACCEPTED, "duplicate"),
+        Err(error) => {
+            tracing::error!(project = %key, %delivery_id, %error, "delivery registry unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "delivery registry unavailable",
+            )
+        }
     }
+}
+
+fn gitlab_delivery_id(headers: &HeaderMap) -> std::result::Result<String, &'static str> {
+    let webhook_id = headers
+        .get("webhook-id")
+        .and_then(|value| value.to_str().ok());
+    let idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok());
+
+    let value = match (webhook_id, idempotency_key) {
+        (Some(current), Some(legacy)) if current != legacy => {
+            return Err("conflicting GitLab delivery IDs");
+        }
+        (Some(current), _) => current,
+        (None, Some(legacy)) => legacy,
+        (None, None) => return Err("missing GitLab delivery ID"),
+    };
+
+    if value.is_empty() || value.len() > MAX_DELIVERY_ID_LENGTH {
+        return Err("invalid GitLab delivery ID");
+    }
+    Ok(value.to_string())
 }
 
 fn verify_gitlab(template: &GitlabTemplate, headers: &HeaderMap, body: &[u8]) -> bool {
@@ -179,6 +259,83 @@ pub fn queue_lock_path(history_file: &FsPath) -> PathBuf {
     }
 }
 
+pub fn delivery_file_path(history_file: &FsPath) -> PathBuf {
+    match history_file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        Some(parent) => parent.join("blip-deliveries.jsonl"),
+        None => PathBuf::from("blip-deliveries.jsonl"),
+    }
+}
+
+async fn delivery_exists(path: &FsPath, project: &str, delivery_id: &str) -> Result<bool> {
+    access_delivery_registry(path, project, delivery_id, false).await
+}
+
+async fn claim_delivery(path: &FsPath, project: &str, delivery_id: &str) -> Result<bool> {
+    access_delivery_registry(path, project, delivery_id, true)
+        .await
+        .map(|already_exists| !already_exists)
+}
+
+async fn access_delivery_registry(
+    path: &FsPath,
+    project: &str,
+    delivery_id: &str,
+    append_when_missing: bool,
+) -> Result<bool> {
+    let path = path.to_path_buf();
+    let project = project.to_string();
+    let delivery_id = delivery_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&path)
+            .with_context(|| format!("open delivery registry {}", path.display()))?;
+        FileExt::lock_exclusive(&file)
+            .with_context(|| format!("lock delivery registry {}", path.display()))?;
+
+        file.seek(SeekFrom::Start(0))?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        for (index, line) in contents.lines().enumerate() {
+            let record = serde_json::from_str::<DeliveryRecord>(line).with_context(|| {
+                format!(
+                    "parse delivery registry {} line {}",
+                    path.display(),
+                    index + 1
+                )
+            })?;
+            if record.project == project && record.delivery_id == delivery_id {
+                FileExt::unlock(&file)?;
+                return Ok(true);
+            }
+        }
+
+        if append_when_missing {
+            file.seek(SeekFrom::End(0))?;
+            serde_json::to_writer(
+                &mut file,
+                &DeliveryRecord {
+                    accepted_at: Utc::now().to_rfc3339(),
+                    project,
+                    delivery_id,
+                },
+            )?;
+            file.write_all(b"\n")?;
+            file.sync_data()?;
+        }
+        FileExt::unlock(&file)?;
+        Ok(false)
+    })
+    .await
+    .context("delivery registry task failed")?
+}
+
 pub fn queue_state(history_file: &FsPath) -> Result<&'static str> {
     let path = queue_lock_path(history_file);
     let file = std::fs::OpenOptions::new()
@@ -216,17 +373,12 @@ async fn acquire_queue_lock(path: &FsPath) -> Result<File> {
     .context("queue lock task failed")?
 }
 
-async fn deploy(
-    project_key: &str,
-    project: &Project,
-    history_file: &FsPath,
-    queue_lock_file: &FsPath,
-) -> Result<()> {
+async fn deploy(job: &Job, history_file: &FsPath, queue_lock_file: &FsPath) -> Result<()> {
     let queue_lock = acquire_queue_lock(queue_lock_file).await?;
     let start = std::time::Instant::now();
-    tracing::info!(project = %project_key, script = %project.script.display(), "deployment started");
+    tracing::info!(project = %job.project_key, delivery_id = %job.delivery_id, script = %job.project.script.display(), "deployment started");
 
-    let result = Command::new(&project.script)
+    let result = Command::new(&job.project.script)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
@@ -246,7 +398,8 @@ async fn deploy(
 
     let record = Record {
         timestamp: Utc::now().to_rfc3339(),
-        project: project_key.to_string(),
+        project: job.project_key.clone(),
+        delivery_id: Some(job.delivery_id.clone()),
         status,
         duration_ms: start.elapsed().as_millis(),
         exit_code,
@@ -256,7 +409,8 @@ async fn deploy(
     FileExt::unlock(&queue_lock).context("release queue lock")?;
 
     tracing::info!(
-        project = %project_key,
+        project = %job.project_key,
+        delivery_id = %job.delivery_id,
         status = %record.status,
         duration_ms = record.duration_ms,
         "deployment finished"
@@ -385,13 +539,150 @@ mod tests {
         );
     }
 
+    #[test]
+    fn delivery_id_uses_current_and_legacy_gitlab_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("idempotency-key", "legacy-id".parse().unwrap());
+        assert_eq!(gitlab_delivery_id(&headers).unwrap(), "legacy-id");
+
+        headers.insert("webhook-id", "current-id".parse().unwrap());
+        assert_eq!(
+            gitlab_delivery_id(&headers),
+            Err("conflicting GitLab delivery IDs")
+        );
+
+        headers.insert("idempotency-key", "current-id".parse().unwrap());
+        assert_eq!(gitlab_delivery_id(&headers).unwrap(), "current-id");
+    }
+
+    #[test]
+    fn delivery_file_is_derived_from_the_history_directory() {
+        assert_eq!(
+            delivery_file_path(FsPath::new("/var/lib/blip/history.jsonl")),
+            PathBuf::from("/var/lib/blip/blip-deliveries.jsonl")
+        );
+        assert_eq!(
+            delivery_file_path(FsPath::new("history.jsonl")),
+            PathBuf::from("blip-deliveries.jsonl")
+        );
+    }
+
     #[tokio::test]
-    async fn queue_lock_excludes_a_second_owner() {
-        let path = std::env::temp_dir().join(format!(
-            "blip-queue-lock-test-{}-{}",
+    async fn delivery_claim_survives_queued_completed_and_restart_checks() {
+        let path = temporary_path("delivery-registry");
+
+        assert!(claim_delivery(&path, "example-app", "delivery-123")
+            .await
+            .unwrap());
+        assert!(!claim_delivery(&path, "example-app", "delivery-123")
+            .await
+            .unwrap());
+        assert!(!claim_delivery(&path, "example-app", "delivery-123")
+            .await
+            .unwrap());
+        assert!(claim_delivery(&path, "another-app", "delivery-123")
+            .await
+            .unwrap());
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_delivery_claim_has_one_winner() {
+        let path = temporary_path("concurrent-delivery-registry");
+        let first = claim_delivery(&path, "example-app", "delivery-456");
+        let second = claim_delivery(&path, "example-app", "delivery-456");
+        let (first, second) = tokio::join!(first, second);
+
+        assert_ne!(first.unwrap(), second.unwrap());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn webhook_deduplicates_queued_completed_and_restarted_delivery() {
+        let history_file = temporary_path("dedup-history");
+        let delivery_file = delivery_file_path(&history_file);
+        let queue_lock_file = queue_lock_path(&history_file);
+        let mut projects = BTreeMap::new();
+        projects.insert(
+            "example-app".to_string(),
+            Project {
+                script: PathBuf::from("/bin/true"),
+                gitlab: gitlab_template(),
+            },
+        );
+        let projects = Arc::new(projects);
+        let (tx, mut rx) = mpsc::channel(1);
+        let state = Arc::new(App {
+            projects: projects.clone(),
+            tx,
+            delivery_file: delivery_file.clone(),
+        });
+
+        assert_eq!(
+            invoke_webhook(state.clone()).await,
+            (StatusCode::ACCEPTED, "queued".to_string())
+        );
+        assert_eq!(
+            invoke_webhook(state).await,
+            (StatusCode::ACCEPTED, "duplicate".to_string())
+        );
+
+        let job = rx.try_recv().unwrap();
+        deploy(&job, &history_file, &queue_lock_file).await.unwrap();
+        let (tx, _) = mpsc::channel(1);
+        let restarted = Arc::new(App {
+            projects,
+            tx,
+            delivery_file: delivery_file.clone(),
+        });
+        assert_eq!(
+            invoke_webhook(restarted).await,
+            (StatusCode::ACCEPTED, "duplicate".to_string())
+        );
+
+        let history = read_history(&history_file, None, None, None).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].contains("\"delivery_id\":\"delivery-789\""));
+
+        std::fs::remove_file(history_file).unwrap();
+        std::fs::remove_file(delivery_file).unwrap();
+        std::fs::remove_file(queue_lock_file).unwrap();
+    }
+
+    async fn invoke_webhook(state: Arc<App>) -> (StatusCode, String) {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-gitlab-token",
+            "correct horse battery staple".parse().unwrap(),
+        );
+        headers.insert("idempotency-key", "delivery-789".parse().unwrap());
+        let response = webhook(
+            State(state),
+            Path("example-app".to_string()),
+            headers,
+            Bytes::from_static(b"{}"),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 64)
+            .await
+            .unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    fn temporary_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "blip-{label}-{}-{}",
             std::process::id(),
             Utc::now().timestamp_nanos_opt().unwrap()
-        ));
+        ))
+    }
+
+    #[tokio::test]
+    async fn queue_lock_excludes_a_second_owner() {
+        let path = temporary_path("queue-lock-test");
         let first = acquire_queue_lock(&path).await.unwrap();
         let second = std::fs::OpenOptions::new()
             .read(true)
