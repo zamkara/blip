@@ -44,5 +44,6 @@ This page preserves early public development summaries. Starting on 2026-09-17, 
 - Added startup recovery for queued and interrupted running work while preserving the single global execution lock.
 - Preserved old delivery-registry records as completed deduplication records.
 - Extended queue inspection with queued, running, and completed counts.
+- Made relative runtime paths deterministic so the installed service and CLI inspect the same files regardless of the shell's current directory.
 - Added focused coverage for FIFO execution, exact capacity, concurrent and project-scoped admission, malformed persistence, legacy records, restart recovery, and recovery coordination with another active process.
 - Updated the roadmap and operational documentation to describe durable waiting work and at-least-once interrupted-run recovery.

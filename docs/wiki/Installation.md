@@ -70,6 +70,8 @@ No installer setting exists for provider, event, branch, tracking, timeout, or l
 
 The lock file appears after the first execution and may remain present. Its existence alone does not mean the queue is locked.
 
+The system configuration may omit **history_file** or use its default relative value. Blip resolves that value to **/var/lib/blip/blip-history.jsonl** consistently for the service and CLI, regardless of the shell's current directory.
+
 ## Upgrade
 
 Run the same installer command. It:

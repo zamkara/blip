@@ -25,7 +25,7 @@ Blip does not parse the event or branch. GitLab decides whether to send the requ
 
 ## Queue ownership
 
-The service owns one global FIFO queue backed by **blip-deliveries.jsonl**. A successful authentication attempts one atomic admission:
+The service owns one global FIFO queue backed by **blip-deliveries.jsonl**. Its location is derived from the resolved history directory, so the service and management CLI inspect the same runtime state. A successful authentication attempts one atomic admission:
 
 - New delivery with space available: append its ID, script path, sequence, and **queued** state, then return **202 queued**.
 - Previously accepted project and delivery ID: return **202 duplicate** without queueing it again.
