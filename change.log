@@ -390,9 +390,31 @@ Validation recorded:
 - bash -n docs/install.sh
 
 State recorded:
-- Committed locally in one commit on feature/rename-crate-to-bliper.
-- Not pushed.
-- dev remains untouched.
+- Merged into dev on remote.
 
+2026-09-18T23:52:50+07:00
+---------------------------------
+Scope: Release version bump 0.2.1
+Branch: feature/bump-version-0.2.1
 
+- Bumped package version to 0.2.1 in Cargo.toml and updated Cargo.lock.
+- Updated documentation status to 0.2.1 in README.md.
 
+Files modified:
+- Cargo.toml
+- Cargo.lock
+- README.md
+- change.log
+
+Validation recorded:
+- git diff --check
+- cargo fmt --all -- --check
+- cargo test --locked --all-targets: 27 passed
+- cargo clippy --locked --all-targets --all-features -- -D warnings
+- cargo build --locked --release
+- cargo package verification: passed
+- bash -n docs/install.sh
+
+State recorded:
+- Committed locally in one commit on feature/bump-version-0.2.1.
+- Pushed to GitLab for merge request verification.

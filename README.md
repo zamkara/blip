@@ -2,7 +2,7 @@
 
 Blip turns an authenticated GitLab webhook delivery into one local executable run. GitLab decides which event and branch may send the webhook; Blip verifies the request, rejects duplicate delivery IDs, places new deliveries in a single queue, and runs the configured script file.
 
-> **Status:** Phase 1 development, version **0.2.0**. The current release provides the GitLab template, management CLI, systemd installation, a durable serial queue, graceful shutdown, in-place upgrades, logs, and basic history. Phase 1 remains on **0.x** releases; Phase 2 begins at **1.0.0**.
+> **Status:** Phase 1 development, version **0.2.1**. The current release provides the GitLab template, management CLI, systemd installation, a durable serial queue, graceful shutdown, in-place upgrades, logs, and basic history. Phase 1 remains on **0.x** releases; Phase 2 begins at **1.0.0**.
 
 ## Why Blip
 
