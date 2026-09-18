@@ -21,9 +21,16 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     path::{Path as FsPath, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
-use tokio::{io::AsyncWriteExt, process::Command, sync::Notify};
+use tokio::{
+    io::AsyncWriteExt,
+    process::Command,
+    sync::{watch, Notify},
+};
 
 type HmacSha256 = Hmac<Sha256>;
 pub const QUEUE_CAPACITY: usize = 128;
@@ -96,6 +103,7 @@ struct App {
     projects: Arc<BTreeMap<String, Project>>,
     wake_worker: Arc<Notify>,
     delivery_file: PathBuf,
+    accepting: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -103,6 +111,13 @@ enum Admission {
     Queued,
     Duplicate,
     Full,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum WorkerStep {
+    Processed,
+    Empty,
+    Shutdown,
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -121,26 +136,67 @@ pub async fn serve(config: Config) -> Result<()> {
         tracing::warn!(recovered, "requeued interrupted deliveries");
     }
     let wake_worker = Arc::new(Notify::new());
+    let accepting = Arc::new(AtomicBool::new(true));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    tokio::spawn(worker_loop(
+    let worker = tokio::spawn(worker_loop(
         delivery_file.clone(),
         history_file,
         queue_lock_file,
         wake_worker.clone(),
+        shutdown_rx,
     ));
 
     let state = App {
         projects: Arc::new(config.projects),
         wake_worker,
         delivery_file,
+        accepting: accepting.clone(),
     };
     let app = Router::new()
         .route("/webhook/:project", post(webhook))
         .with_state(Arc::new(state));
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     println!("blip listening on {}", config.bind);
-    axum::serve(listener, app).await?;
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(accepting.clone(), shutdown_tx.clone()))
+        .await;
+    accepting.store(false, Ordering::Release);
+    let _ = shutdown_tx.send(true);
+    worker.await.context("queue worker task failed")?;
+    server?;
     Ok(())
+}
+
+async fn shutdown_signal(accepting: Arc<AtomicBool>, shutdown: watch::Sender<bool>) {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(error) => {
+                    tracing::error!(%error, "failed to install SIGTERM handler");
+                    std::future::pending::<()>().await;
+                    return;
+                }
+            };
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                if let Err(error) = result {
+                    tracing::error!(%error, "failed to wait for shutdown signal");
+                }
+            }
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    if let Err(error) = tokio::signal::ctrl_c().await {
+        tracing::error!(%error, "failed to wait for shutdown signal");
+    }
+
+    accepting.store(false, Ordering::Release);
+    let _ = shutdown.send(true);
+    tracing::info!("shutdown requested; finishing the active deployment");
 }
 
 async fn webhook(
@@ -149,6 +205,10 @@ async fn webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    if !state.accepting.load(Ordering::Acquire) {
+        return (StatusCode::SERVICE_UNAVAILABLE, "shutting down");
+    }
+
     let Some(project) = state.projects.get(&key).cloned() else {
         return (StatusCode::NOT_FOUND, "unknown project");
     };
@@ -560,37 +620,137 @@ async fn acquire_queue_lock(path: &FsPath) -> Result<File> {
     .context("queue lock task failed")?
 }
 
-async fn worker_loop(
-    delivery_file: PathBuf,
-    history_file: PathBuf,
-    queue_lock_file: PathBuf,
-    wake_worker: Arc<Notify>,
-) {
-    loop {
-        let notified = wake_worker.notified();
-        match process_next_delivery(&delivery_file, &history_file, &queue_lock_file).await {
-            Ok(true) => continue,
-            Ok(false) => notified.await,
+async fn try_acquire_queue_lock(path: &FsPath) -> Result<Option<File>> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("open queue lock {}", path.display()))?;
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Some(file)),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(error) => {
-                tracing::error!(%error, "durable queue worker failed");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                Err(error).with_context(|| format!("acquire queue lock {}", path.display()))
+            }
+        }
+    })
+    .await
+    .context("queue lock task failed")?
+}
+
+async fn acquire_queue_lock_until_shutdown(
+    path: &FsPath,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<Option<File>> {
+    loop {
+        if *shutdown.borrow() {
+            return Ok(None);
+        }
+        if let Some(file) = try_acquire_queue_lock(path).await? {
+            if *shutdown.borrow() {
+                FileExt::unlock(&file).context("release queue lock during shutdown")?;
+                return Ok(None);
+            }
+            return Ok(Some(file));
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(None);
+                }
             }
         }
     }
 }
 
+async fn worker_loop(
+    delivery_file: PathBuf,
+    history_file: PathBuf,
+    queue_lock_file: PathBuf,
+    wake_worker: Arc<Notify>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    loop {
+        if *shutdown.borrow() {
+            break;
+        }
+        let notified = wake_worker.notified();
+        match process_next_delivery_until_shutdown(
+            &delivery_file,
+            &history_file,
+            &queue_lock_file,
+            &mut shutdown,
+        )
+        .await
+        {
+            Ok(WorkerStep::Processed) => continue,
+            Ok(WorkerStep::Shutdown) => break,
+            Ok(WorkerStep::Empty) => {
+                tokio::select! {
+                    _ = notified => {}
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, "durable queue worker failed");
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    tracing::info!("queue worker stopped");
+}
+
+#[cfg(test)]
 async fn process_next_delivery(
     delivery_file: &FsPath,
     history_file: &FsPath,
     queue_lock_file: &FsPath,
 ) -> Result<bool> {
+    let (_shutdown_tx, mut shutdown) = watch::channel(false);
+    Ok(matches!(
+        process_next_delivery_until_shutdown(
+            delivery_file,
+            history_file,
+            queue_lock_file,
+            &mut shutdown,
+        )
+        .await?,
+        WorkerStep::Processed
+    ))
+}
+
+async fn process_next_delivery_until_shutdown(
+    delivery_file: &FsPath,
+    history_file: &FsPath,
+    queue_lock_file: &FsPath,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<WorkerStep> {
     let Some(candidate) = next_queued_delivery(delivery_file).await? else {
-        return Ok(false);
+        return Ok(WorkerStep::Empty);
     };
-    let queue_lock = acquire_queue_lock(queue_lock_file).await?;
+    let Some(queue_lock) = acquire_queue_lock_until_shutdown(queue_lock_file, shutdown).await?
+    else {
+        return Ok(WorkerStep::Shutdown);
+    };
     let Some(job) = begin_delivery(delivery_file, candidate).await? else {
         FileExt::unlock(&queue_lock).context("release queue lock")?;
-        return Ok(true);
+        return Ok(WorkerStep::Processed);
     };
 
     let start = std::time::Instant::now();
@@ -634,7 +794,7 @@ async fn process_next_delivery(
         duration_ms = record.duration_ms,
         "deployment finished"
     );
-    Ok(true)
+    Ok(WorkerStep::Processed)
 }
 
 async fn append_history(path: &FsPath, record: &Record) -> Result<()> {
@@ -1059,6 +1219,7 @@ mod tests {
             projects: projects.clone(),
             wake_worker: Arc::new(Notify::new()),
             delivery_file: delivery_file.clone(),
+            accepting: Arc::new(AtomicBool::new(true)),
         });
         assert_eq!(
             invoke_webhook(state.clone()).await,
@@ -1072,6 +1233,7 @@ mod tests {
             projects,
             wake_worker: Arc::new(Notify::new()),
             delivery_file: delivery_file.clone(),
+            accepting: Arc::new(AtomicBool::new(true)),
         });
         assert_eq!(
             invoke_webhook(restarted).await,
@@ -1079,6 +1241,187 @@ mod tests {
         );
         assert_eq!(delivery_stats(&delivery_file).await.unwrap().queued, 1);
         remove_files(&[&delivery_file]);
+    }
+
+    #[tokio::test]
+    async fn webhook_admission_closes_during_shutdown() {
+        let delivery_file = temporary_path("shutdown-admission");
+        let mut projects = BTreeMap::new();
+        projects.insert(
+            "example-app".to_string(),
+            Project {
+                script: PathBuf::from("/bin/true"),
+                gitlab: gitlab_template(),
+            },
+        );
+        let state = Arc::new(App {
+            projects: Arc::new(projects),
+            wake_worker: Arc::new(Notify::new()),
+            delivery_file: delivery_file.clone(),
+            accepting: Arc::new(AtomicBool::new(false)),
+        });
+
+        assert_eq!(
+            invoke_webhook(state).await,
+            (StatusCode::SERVICE_UNAVAILABLE, "shutting down".to_string())
+        );
+        assert!(!delivery_file.exists());
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_finishes_active_job_and_preserves_waiting_job() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let runtime_dir = temporary_directory("graceful-shutdown-runtime");
+        let history_file = runtime_dir.join("blip-history.jsonl");
+        let delivery_file = delivery_file_path(&history_file);
+        let queue_lock_file = queue_lock_path(&history_file);
+        let script = runtime_dir.join("deploy");
+        let started = runtime_dir.join("started");
+        let release = runtime_dir.join("release");
+        let finished = runtime_dir.join("finished");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nwhile [ ! -f '{}' ]; do sleep 0.01; done\ntouch '{}'\n",
+                started.display(),
+                release.display(),
+                finished.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            admit_delivery(&delivery_file, "app", "first", &script)
+                .await
+                .unwrap(),
+            Admission::Queued
+        );
+        assert_eq!(
+            admit_delivery(&delivery_file, "app", "second", &script)
+                .await
+                .unwrap(),
+            Admission::Queued
+        );
+
+        let wake_worker = Arc::new(Notify::new());
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let worker = tokio::spawn(worker_loop(
+            delivery_file.clone(),
+            history_file.clone(),
+            queue_lock_file.clone(),
+            wake_worker,
+            shutdown_rx,
+        ));
+        for _ in 0..200 {
+            if started.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(started.exists());
+
+        shutdown_tx.send(true).unwrap();
+        std::fs::write(&release, b"").unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(finished.exists());
+        assert_eq!(
+            delivery_stats(&delivery_file).await.unwrap(),
+            DeliveryStats {
+                queued: 1,
+                running: 0,
+                completed: 1,
+            }
+        );
+        let history = read_history(&history_file, None, None, None).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].contains("\"delivery_id\":\"first\""));
+
+        remove_files(&[
+            &history_file,
+            &delivery_file,
+            &queue_lock_file,
+            &script,
+            &started,
+            &release,
+            &finished,
+        ]);
+        std::fs::remove_dir(runtime_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_stops_an_idle_worker() {
+        let runtime_dir = temporary_directory("idle-shutdown-runtime");
+        let history_file = runtime_dir.join("blip-history.jsonl");
+        let delivery_file = delivery_file_path(&history_file);
+        let queue_lock_file = queue_lock_path(&history_file);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let worker = tokio::spawn(worker_loop(
+            delivery_file.clone(),
+            history_file,
+            queue_lock_file.clone(),
+            Arc::new(Notify::new()),
+            shutdown_rx,
+        ));
+
+        tokio::task::yield_now().await;
+        shutdown_tx.send(true).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), worker)
+            .await
+            .unwrap()
+            .unwrap();
+
+        remove_files(&[&delivery_file, &queue_lock_file]);
+        std::fs::remove_dir(runtime_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_interrupts_global_lock_wait() {
+        let runtime_dir = temporary_directory("lock-wait-shutdown-runtime");
+        let history_file = runtime_dir.join("blip-history.jsonl");
+        let delivery_file = delivery_file_path(&history_file);
+        let queue_lock_file = queue_lock_path(&history_file);
+        assert_eq!(
+            admit_delivery(&delivery_file, "app", "waiting", FsPath::new("/bin/true"))
+                .await
+                .unwrap(),
+            Admission::Queued
+        );
+        let active_lock = acquire_queue_lock(&queue_lock_file).await.unwrap();
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let worker_delivery_file = delivery_file.clone();
+        let worker_history_file = history_file.clone();
+        let worker_lock_file = queue_lock_file.clone();
+        let worker = tokio::spawn(async move {
+            process_next_delivery_until_shutdown(
+                &worker_delivery_file,
+                &worker_history_file,
+                &worker_lock_file,
+                &mut shutdown_rx,
+            )
+            .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        shutdown_tx.send(true).unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), worker)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            WorkerStep::Shutdown
+        );
+        assert_eq!(delivery_stats(&delivery_file).await.unwrap().queued, 1);
+
+        FileExt::unlock(&active_lock).unwrap();
+        remove_files(&[&delivery_file, &queue_lock_file]);
+        std::fs::remove_dir(runtime_dir).unwrap();
     }
 
     async fn invoke_webhook(state: Arc<App>) -> (StatusCode, String) {

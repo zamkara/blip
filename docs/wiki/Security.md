@@ -53,6 +53,8 @@ Webhook payload data is not passed as a command argument, which prevents payload
 
 One advisory lock coordinates the global queue. Do not delete **blip.queue.lock** merely because it exists; the persistent file is normal. Use process inspection and service logs to diagnose a genuinely blocked execution.
 
+During graceful shutdown, Blip keeps the global lock until the active script and its state writes finish. Waiting jobs remain durable and do not start. The service stop timeout is intentionally unlimited until process timeout and cancellation are implemented.
+
 ## Known gaps
 
 - No request body limit or rate limiter.
@@ -60,6 +62,6 @@ One advisory lock coordinates the global queue. Do not delete **blip.queue.lock*
 - No execution timeout, cancellation, or process-group control.
 - No per-project Unix identity or process sandbox.
 - No history retention or structured log redaction.
-- No graceful queue drain during shutdown.
+- No execution timeout; a non-terminating script can block graceful service stop.
 
 These gaps are listed in the [roadmap](Roadmap.md) and prevent claiming production hardening.

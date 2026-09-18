@@ -15,8 +15,10 @@ use std::{
 struct Cli {
     #[arg(short, long, global = true, value_name = "FILE")]
     config: Option<PathBuf>,
+    #[arg(short = 'U', long, conflicts_with = "config")]
+    upgrade: bool,
     #[command(subcommand)]
-    command: CommandKind,
+    command: Option<CommandKind>,
 }
 
 #[derive(Subcommand)]
@@ -131,7 +133,19 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_path = config::resolve_path(cli.config.clone());
 
-    match cli.command {
+    if cli.upgrade {
+        if cli.command.is_some() {
+            anyhow::bail!("--upgrade cannot be combined with another command");
+        }
+        system::upgrade()?;
+        return Ok(());
+    }
+
+    let command = cli
+        .command
+        .context("a command is required; use --help for available commands")?;
+
+    match command {
         CommandKind::Serve => runtime::serve(config::load(&config_path)?).await?,
         CommandKind::Config { command } => handle_config(command, &config_path)?,
         CommandKind::Project { command } => handle_project(command, &config_path)?,
@@ -341,5 +355,12 @@ mod tests {
             "#,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn upgrade_short_flag_does_not_require_a_subcommand() {
+        let cli = Cli::try_parse_from(["blip", "-U"]).unwrap();
+        assert!(cli.upgrade);
+        assert!(cli.command.is_none());
     }
 }

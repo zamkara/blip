@@ -9,10 +9,13 @@ It does not create an application deployment script. Create that executable file
 Copy the complete command:
 
 ~~~bash
-bash -c 'installer="$(mktemp)" || exit 1; curl -fsSL "https://gitlab.com/almateraincubator/utilities/blip/-/raw/dev/docs/install.sh" -o "$installer" && sudo env BLIP_USER="$USER" bash "$installer"; result=$?; rm -f -- "$installer"; exit "$result"'
+curl -fsSL "https://gitlab.com/almateraincubator/utilities/blip/-/raw/dev/docs/install.sh" | sudo bash
 ~~~
 
-The wrapper explicitly invokes Bash, so it can be pasted from Bash, Fish, or another interactive shell.
+The pipeline explicitly starts Bash as root and works when pasted into Bash,
+Fish, or another interactive shell. The installer obtains the existing
+non-root build account from **SUDO_USER**. Standard installation therefore
+needs no environment variables or command arguments.
 
 The first run asks only for:
 
@@ -74,15 +77,27 @@ The system configuration may omit **history_file** or use its default relative v
 
 ## Upgrade
 
-Run the same installer command. It:
+After the first installation, run either form:
+
+~~~bash
+blip --upgrade
+blip -U
+~~~
+
+Blip invokes the upgrade-only path from the installer-managed source checkout. It:
 
 1. Refuses a dirty or mismatched source checkout.
 2. Fetches and fast-forwards the selected branch.
-3. Builds and replaces the binary.
-4. Preserves a valid **/etc/blip/blip.toml**, or backs up and replaces the obsolete project-array schema.
-5. Validates configuration and restarts the service.
+3. Builds as the selected non-root build user.
+4. Replaces the binary while preserving configuration and runtime data.
+5. Validates **/etc/blip/blip.toml**.
+6. Reinstalls the unit with its existing non-root service user and restarts the service.
 
-Set **BLIP_RECONFIGURE=1** only when intentionally replacing configuration. The installer writes a timestamped backup first.
+The default source is **/usr/local/src/blip** and the default branch is **dev**. Existing **BLIP_SOURCE_DIR**, **BLIP_REPO_URL**, **BLIP_REPO_BRANCH**, and **BLIP_INSTALL_DEPENDENCIES** overrides are supported. Run the documented installer when the installer-owned checkout or service does not exist.
+
+Running the full installer remains safe for repair or reconfiguration. A normal full installation now also restarts an already active service after replacing its binary.
+
+For a full installer run, set **BLIP_RECONFIGURE=1** only when intentionally replacing configuration. The installer writes a timestamped backup first. The upgrade command never replaces configuration.
 
 ## Service commands
 
@@ -98,6 +113,8 @@ blip logs --follow
 ~~~
 
 These commands may also be run as **sudo blip ...**. Without sudo, Blip requests elevation only for the operation that needs it.
+
+Service stop and restart wait for the active deployment script to finish. Waiting queue entries are retained for the next start. The unit uses systemd **KillMode=mixed**, so the initial stop signal reaches Blip without terminating its active child process. Because execution timeout is not implemented, a script that never exits can block service stop and must be handled by the operator.
 
 Inspect configuration, history, and queue state:
 
@@ -128,6 +145,10 @@ The final catch-all rule is required. See the [official Cloudflare Tunnel config
 ### Cargo works normally but fails under sudo
 
 Set **BLIP_USER** to the account that owns the Rust toolchain. The installer runs Cargo and rustup with that account's home and PATH.
+
+### Upgrade refuses the source checkout
+
+**blip --upgrade** refuses dirty source state, a mismatched remote, and non-fast-forward history. Inspect **/usr/local/src/blip** and preserve or remove intentional local work manually; the upgrader never resets it.
 
 ### Replace another invalid configuration
 

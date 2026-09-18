@@ -56,6 +56,10 @@ Preserve these decisions unless the user explicitly changes the product design:
 11. Operational capabilities belong in the `blip` executable. Shell scripts
     should bootstrap the binary, then delegate configuration and service work
     to its CLI.
+12. Graceful shutdown closes admission, finishes only the active job, and leaves
+    waiting entries durable for the next start.
+13. Phase 1 uses `0.x` versions. Phase 2 begins with `1.0.0`; do not publish a
+    `1.x` version while Phase 1 roadmap work remains.
 
 The intended minimal configuration is:
 
@@ -79,6 +83,8 @@ The following behavior is implemented and must remain covered by tests:
 - global queue capacity of 128 waiting jobs;
 - durable FIFO queue state across service restarts;
 - startup recovery of interrupted running jobs under the global execution lock;
+- SIGTERM and SIGINT shutdown that finishes the active job without starting the
+  next queued job;
 - serial script execution under one advisory execution lock;
 - persistent delivery-ID claims using `webhook-id`;
 - `Idempotency-Key` fallback for legacy GitLab deliveries;
@@ -87,6 +93,7 @@ The following behavior is implemented and must remain covered by tests:
 - structured JSONL execution history;
 - configuration, project, history, logs, queue, and systemd management through
   the CLI.
+- in-place upgrade and service restart through `blip --upgrade` and `blip -U`.
 
 Runtime files derived from the history directory are:
 
@@ -283,6 +290,8 @@ credentials by default. Revealing secrets must require an explicit option.
 - Persist queued, running, and completed state in the delivery journal.
 - Recover interrupted running entries only while holding the global execution
   lock.
+- Stop webhook admission before worker shutdown, finish an already running job,
+  and preserve waiting entries as queued.
 - Never allow two deployment scripts to run concurrently when they share the
   runtime directory.
 - Keep one global execution lock, regardless of project count.
@@ -316,6 +325,7 @@ Maintain support for:
 - queue and runtime-path inspection;
 - systemd install, uninstall, status, start, stop, restart, enable, and disable;
 - foreground serving with an explicit config path.
+- in-place upgrade from the installer-owned checkout with `--upgrade` or `-U`.
 
 Read-only commands should run without root when permissions allow. System
 configuration and systemd mutations may request `sudo` narrowly. The service
@@ -340,6 +350,8 @@ The installer must:
 - detect and back up the obsolete `[[projects]]` schema automatically;
 - validate configuration through the installed Blip binary;
 - delegate systemd unit creation and management to Blip;
+- provide a non-interactive upgrade-only path used by `blip --upgrade`;
+- restart an already active service after replacing its binary;
 - avoid deleting configuration, history, registry, source, or binaries during a
   normal service uninstall.
 
@@ -387,6 +399,8 @@ Also perform focused tests for the changed behavior. Examples:
 - configuration changes: parse, validate, render, redact, save, and old-data
   compatibility;
 - service changes: generated unit content and privilege behavior;
+- shutdown changes: closed admission, idle stop, active-job completion, queued
+  preservation, and lock-wait interruption;
 - installer changes: fresh install, upgrade, legacy config, and non-interactive
   environment behavior on a disposable host when available.
 

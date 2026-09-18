@@ -2,13 +2,14 @@ use anyhow::{Context, Result};
 use std::{
     ffi::OsString,
     os::unix::fs::PermissionsExt,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, ExitStatus},
 };
 
 const UNIT_NAME: &str = "blip.service";
 const UNIT_PATH: &str = "/etc/systemd/system/blip.service";
 const DATA_DIR: &str = "/var/lib/blip";
+const DEFAULT_SOURCE_DIR: &str = "/usr/local/src/blip";
 
 pub fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
@@ -65,7 +66,22 @@ pub fn install_service(config_path: &Path, user: &str, start: bool) -> Result<()
     std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o640))
         .context("set config permissions")?;
 
-    let unit = format!(
+    let unit = service_unit(&executable, &config_path, user, &group);
+    let temporary = format!("{UNIT_PATH}.tmp.{}", std::process::id());
+    std::fs::write(&temporary, unit).context("write temporary systemd unit")?;
+    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o644))?;
+    std::fs::rename(&temporary, UNIT_PATH).context("install systemd unit")?;
+
+    systemctl(&["daemon-reload"], false)?;
+    systemctl(&["enable", UNIT_NAME], false)?;
+    if start {
+        systemctl(&["restart", UNIT_NAME], false)?;
+    }
+    Ok(())
+}
+
+fn service_unit(executable: &Path, config_path: &Path, user: &str, group: &str) -> String {
+    format!(
         "[Unit]\n\
          Description=Blip webhook deployment service\n\
          After=network-online.target\n\
@@ -78,25 +94,70 @@ pub fn install_service(config_path: &Path, user: &str, start: bool) -> Result<()
          ExecStart={} --config {} serve\n\
          Restart=on-failure\n\
          RestartSec=5s\n\
+         KillMode=mixed\n\
+         TimeoutStopSec=infinity\n\
          UMask=0027\n\
          NoNewPrivileges=true\n\n\
          [Install]\n\
          WantedBy=multi-user.target\n",
         executable.display(),
         config_path.display()
-    );
-    let temporary = format!("{UNIT_PATH}.tmp.{}", std::process::id());
-    std::fs::write(&temporary, unit).context("write temporary systemd unit")?;
-    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o644))?;
-    std::fs::rename(&temporary, UNIT_PATH).context("install systemd unit")?;
+    )
+}
 
-    systemctl(&["daemon-reload"], false)?;
-    if start {
-        systemctl(&["enable", "--now", UNIT_NAME], false)?;
-    } else {
-        systemctl(&["enable", UNIT_NAME], false)?;
+pub fn upgrade() -> Result<()> {
+    let source_dir = std::env::var_os("BLIP_SOURCE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SOURCE_DIR));
+    let installer = source_dir.join("docs/install.sh");
+    if !installer.is_file() {
+        anyhow::bail!(
+            "upgrade installer not found at {}; run the documented installer first",
+            installer.display()
+        );
     }
-    Ok(())
+    let build_user = std::env::var("BLIP_USER")
+        .ok()
+        .filter(|user| user != "root")
+        .or_else(|| {
+            std::env::var("SUDO_USER")
+                .ok()
+                .filter(|user| user != "root")
+        })
+        .or_else(|| std::env::var("USER").ok().filter(|user| user != "root"))
+        .context("cannot determine the non-root build user")?;
+
+    let mut command = upgrade_command(&source_dir, &build_user, !is_root());
+    for name in [
+        "BLIP_REPO_URL",
+        "BLIP_REPO_BRANCH",
+        "BLIP_INSTALL_DEPENDENCIES",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            command.arg(format!("{name}={}", value.to_string_lossy()));
+        }
+    }
+    let status = command
+        .arg("bash")
+        .arg(&installer)
+        .status()
+        .with_context(|| format!("run upgrade installer {}", installer.display()))?;
+    ensure_success(status, "Blip upgrade")
+}
+
+fn upgrade_command(source_dir: &Path, build_user: &str, use_sudo: bool) -> Command {
+    let mut command = if use_sudo {
+        let mut command = Command::new("sudo");
+        command.arg("--").arg("env");
+        command
+    } else {
+        Command::new("env")
+    };
+    command
+        .arg(format!("BLIP_USER={build_user}"))
+        .arg("BLIP_UPGRADE_ONLY=1")
+        .arg(format!("BLIP_SOURCE_DIR={}", source_dir.display()));
+    command
 }
 
 pub fn uninstall_service() -> Result<()> {
@@ -203,5 +264,45 @@ fn ensure_success(status: ExitStatus, program: &str) -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!("{program} exited with {status}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_unit_restarts_safely_and_allows_active_job_completion() {
+        let unit = service_unit(
+            Path::new("/usr/local/bin/blip"),
+            Path::new("/etc/blip/blip.toml"),
+            "deploy",
+            "deploy",
+        );
+        assert!(unit.contains("ExecStart=/usr/local/bin/blip --config /etc/blip/blip.toml serve"));
+        assert!(unit.contains("KillMode=mixed"));
+        assert!(unit.contains("TimeoutStopSec=infinity"));
+        assert!(unit.contains("User=deploy"));
+        assert!(unit.contains("NoNewPrivileges=true"));
+    }
+
+    #[test]
+    fn upgrade_command_requests_narrow_elevation_and_upgrade_only_mode() {
+        let command = upgrade_command(Path::new("/usr/local/src/blip"), "builder", true);
+        assert_eq!(command.get_program(), "sudo");
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arguments,
+            [
+                "--",
+                "env",
+                "BLIP_USER=builder",
+                "BLIP_UPGRADE_ONLY=1",
+                "BLIP_SOURCE_DIR=/usr/local/src/blip",
+            ]
+        );
     }
 }

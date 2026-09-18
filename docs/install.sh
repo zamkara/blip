@@ -31,6 +31,8 @@ repo_branch="${BLIP_REPO_BRANCH:-$BLIP_DEFAULT_BRANCH}"
 source_dir="${BLIP_SOURCE_DIR:-/usr/local/src/blip}"
 service_user="${BLIP_SERVICE_USER:-$build_user}"
 service_group=""
+installed_service_user=""
+upgrade_only="${BLIP_UPGRADE_ONLY:-0}"
 build_path="$build_home/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 [[ "$source_dir" = /* ]] || fail "BLIP_SOURCE_DIR must be an absolute path"
@@ -40,6 +42,8 @@ case "$source_dir" in
     ;;
 esac
 [[ "$service_user" != "root" ]] || fail "BLIP_SERVICE_USER must not be root"
+[[ "$upgrade_only" == "0" || "$upgrade_only" == "1" ]] || \
+  fail "BLIP_UPGRADE_ONLY must be 0 or 1"
 
 run_as_builder() {
   runuser -u "$build_user" -- env \
@@ -136,9 +140,24 @@ else
   run_as_builder git -C "$source_dir" merge --ff-only "origin/$repo_branch"
 fi
 
+if [[ "$upgrade_only" == "1" ]]; then
+  [[ -f "$BLIP_CONFIG_PATH" ]] || fail "upgrade requires an existing configuration: $BLIP_CONFIG_PATH"
+  installed_service_user="$(systemctl show blip.service --property=User --value)"
+  [[ -n "$installed_service_user" && "$installed_service_user" != "root" ]] || \
+    fail "cannot determine the installed non-root service user"
+fi
+
 log "building the release binary"
 run_as_builder "${cargo_command[@]}" build --locked --release --manifest-path "$source_dir/Cargo.toml"
 install -m 0755 "$source_dir/target/release/blip" "$BLIP_BINARY_PATH"
+
+if [[ "$upgrade_only" == "1" ]]; then
+  log "validating existing configuration"
+  "$BLIP_BINARY_PATH" --config "$BLIP_CONFIG_PATH" config validate
+  "$BLIP_BINARY_PATH" --config "$BLIP_CONFIG_PATH" service install --user "$installed_service_user"
+  log "upgrade complete: $("$BLIP_BINARY_PATH" --version)"
+  exit 0
+fi
 
 if ! id "$service_user" >/dev/null 2>&1; then
   command -v useradd >/dev/null 2>&1 || fail "cannot create service user because useradd is unavailable"

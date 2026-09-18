@@ -2,7 +2,7 @@
 
 Blip turns an authenticated GitLab webhook delivery into one local executable run. GitLab decides which event and branch may send the webhook; Blip verifies the request, rejects duplicate delivery IDs, places new deliveries in a single queue, and runs the configured script file.
 
-> **Status:** early MVP. The current release provides the GitLab template, management CLI, systemd installation, a durable serial queue, logs, and basic history. Additional Git hosts and the remaining roadmap items are planned work.
+> **Status:** Phase 1 development, version **0.2.0**. The current release provides the GitLab template, management CLI, systemd installation, a durable serial queue, graceful shutdown, in-place upgrades, logs, and basic history. Phase 1 remains on **0.x** releases; Phase 2 begins at **1.0.0**.
 
 ## Why Blip
 
@@ -29,11 +29,15 @@ See the [configuration reference](docs/wiki/Configuration.md) for global default
 
 ## Install and set up
 
-Prepare the deployment executable first, then copy this complete command. It works from Bash, Fish, and other interactive shells because it explicitly starts Bash:
+Prepare the deployment executable first, then copy this command. It works from Bash, Fish, and other interactive shells:
 
 ~~~bash
-bash -c 'installer="$(mktemp)" || exit 1; curl -fsSL "https://gitlab.com/almateraincubator/utilities/blip/-/raw/dev/docs/install.sh" -o "$installer" && sudo env BLIP_USER="$USER" bash "$installer"; result=$?; rm -f -- "$installer"; exit "$result"'
+curl -fsSL "https://gitlab.com/almateraincubator/utilities/blip/-/raw/dev/docs/install.sh" | sudo bash
 ~~~
+
+The installer obtains the non-root build account from **SUDO_USER**. No user,
+repository, branch, or source-directory argument is required for a standard
+installation.
 
 The first run asks for:
 
@@ -41,7 +45,17 @@ The first run asks for:
 2. The absolute path to the executable script file.
 3. A GitLab Signing token, or a legacy Secret token when no Signing token is supplied.
 
-Later runs update the binary and preserve a valid **/etc/blip/blip.toml**. If the installer finds the obsolete **[[projects]]** schema, the same copy-paste command backs it up and starts the current configuration prompt automatically. Full options are documented in [Installation](docs/wiki/Installation.md).
+If the installer finds the obsolete **[[projects]]** schema, the same copy-paste command backs it up and starts the current configuration prompt automatically. After the first installation, use **blip --upgrade** instead of downloading the installer again. Full options are documented in [Installation](docs/wiki/Installation.md).
+
+## Upgrade
+
+~~~bash
+blip --upgrade
+# or
+blip -U
+~~~
+
+The upgrade command fast-forwards the installer-managed **dev** checkout, builds as the non-root build user, installs the new binary, validates the existing configuration, updates the systemd unit, and restarts the service. Configuration and runtime data are preserved. A dirty checkout or non-fast-forward update fails without rewriting local work.
 
 ## GitLab webhook
 
@@ -66,6 +80,8 @@ Accepted deliveries are appended to **blip-deliveries.jsonl** beside the history
 
 A retry with the same GitLab **webhook-id** receives **202 duplicate** and does not create another queue entry. One worker consumes the queue, and **blip.queue.lock** prevents scripts from overlapping even if two Blip processes use the same runtime directory. A script interrupted by process or host failure may run again, so deployment scripts must remain idempotent.
 
+SIGTERM or SIGINT closes webhook admission and lets the active script finish. Waiting entries remain durable and resume after the next start. Blip does not begin another queued script while shutting down.
+
 ## CLI
 
 ~~~bash
@@ -82,6 +98,7 @@ blip history --project example-app --status failure --limit 20
 blip logs --lines 100
 blip logs --follow
 blip queue
+blip --upgrade
 
 blip service status
 blip service restart
@@ -94,6 +111,10 @@ blip --config /etc/blip/blip.toml serve
 
 The installed config is detected automatically. Use global **--config FILE** for another file. Read commands run as the current user when permissions allow. Config mutations and system service operations invoke **sudo** when needed, so both **blip ...** and **sudo blip ...** are supported.
 
+## Versioning
+
+Phase 1 uses **0.x** versions while the provider set and operational contracts are still being completed. Minor releases may change pre-1.0 interfaces and must document migrations. Phase 2 starts with **1.0.0** and a stable public configuration and CLI contract.
+
 ## HTTP responses
 
 | Status | Meaning |
@@ -103,7 +124,7 @@ The installed config is detected automatically. Use global **--config FILE** for
 | **400 Bad Request** | The GitLab delivery ID is missing, invalid, or conflicting. |
 | **401 Unauthorized** | GitLab authentication failed. |
 | **404 Not Found** | The project key is not configured. |
-| **503 Service Unavailable** | The 128-entry waiting queue is full, or the durable queue journal cannot be trusted. |
+| **503 Service Unavailable** | Blip is shutting down, the 128-entry waiting queue is full, or the durable queue journal cannot be trusted. |
 
 **202** does not mean deployment succeeded. Check **blip history** or **blip logs**.
 

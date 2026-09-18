@@ -6,6 +6,8 @@ Blip replaces manual SSH, pull, and deploy work for operators running many appli
 
 The product remains a native Rust systemd service with one centralized configuration and a full management CLI. It is not a hosted runner, workflow language, billing platform, or Jenkins replacement.
 
+Phase 1 uses pre-stable **0.x** releases while provider and operational contracts are completed. Phase 2 begins with **1.0.0** and a stable public CLI and configuration contract.
+
 ## Design decisions
 
 The current architecture follows these decisions:
@@ -32,8 +34,10 @@ The current architecture follows these decisions:
 - One global advisory lock derived from the runtime directory.
 - Persistent GitLab delivery-ID deduplication using **webhook-id** with legacy **Idempotency-Key** fallback.
 - Recovery of queued and interrupted running deliveries after restart.
+- Graceful SIGTERM and SIGINT handling that finishes the active job and preserves waiting entries.
 - Success/failure, duration, exit code, and spawn-error history.
 - CLI commands for serving, global configuration, project CRUD, filtered history, logs, queue inspection, and systemd management.
+- In-place upgrade through **blip --upgrade** and **blip -U**, including service restart.
 - One combined installation and setup script for systemd.
 
 ## Phase 1 — Complete the initial release
@@ -49,7 +53,6 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 
 ### Queue reliability
 
-- Add graceful shutdown and queue drain.
 - Record queue rejection and lock wait duration.
 - Add execution timeout and cancellation without allowing the next job to overlap a surviving process.
 - Define retry policy without turning Blip into a workflow engine.
@@ -108,6 +111,8 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 - Two Blip processes sharing one runtime lock.
 - Success, non-zero exit, and spawn failure.
 - Restart recovery through the systemd service with queued and interrupted work.
+- Graceful shutdown with idle, active, waiting-lock, and queued work.
+- Upgrade from the previous release with configuration and history preserved.
 
 ### End to end
 
