@@ -329,3 +329,36 @@ Validation recorded:
 State recorded:
 - Changes remain uncommitted and unpushed.
 - dev remains untouched.
+
+2026-09-18T22:25:20+07:00
+---------------------------------
+Scope: Pre-built binary installation method and documentation
+Branch: feature/prebuilt-binary-installer
+
+- Added pre-built release binary installation support to docs/install.sh via
+  BLIP_INSTALL_METHOD="binary" with automated OS/architecture detection and
+  SHA256 checksum verification.
+- Preserved default source compilation behavior and single-installer semantics.
+- Updated README.md and docs/wiki/Installation.md to document both the default
+  source installation and the lightweight pre-built binary installation paths.
+- Sourced the installer command via the canonical GitLab repository URL.
+
+Files modified:
+- README.md
+- docs/install.sh
+- docs/wiki/Installation.md
+- change.log
+
+Validation recorded:
+- git diff --check
+- cargo fmt --all -- --check
+- cargo test --locked --all-targets: 27 passed
+- cargo clippy --locked --all-targets --all-features -- -D warnings
+- cargo build --locked --release
+- bash -n docs/install.sh
+
+State recorded:
+- Committed locally in one commit on feature/prebuilt-binary-installer.
+- Not pushed.
+- dev remains untouched.
+

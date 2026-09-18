@@ -73,83 +73,145 @@ install_build_dependencies() {
   fi
 }
 
-missing_build_tool=0
-for command_name in git curl cc; do
-  command -v "$command_name" >/dev/null 2>&1 || missing_build_tool=1
-done
-if [[ "$missing_build_tool" -eq 1 ]]; then
-  log "installing native build dependencies"
-  install_build_dependencies
-fi
+readonly BLIP_GITHUB_REPO="zamkara/blip"
+install_method="${BLIP_INSTALL_METHOD:-source}"
+[[ "$install_method" == "source" || "$install_method" == "binary" ]] || \
+  fail "BLIP_INSTALL_METHOD must be 'source' or 'binary'"
 
-for command_name in getent grep install runuser systemctl; do
-  command -v "$command_name" >/dev/null 2>&1 || fail "required command is missing: $command_name"
-done
+detect_target() {
+  local os arch
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m)"
 
-rustup_installer=""
-cleanup() {
-  [[ -z "$rustup_installer" || ! -f "$rustup_installer" ]] || rm -f -- "$rustup_installer"
+  case "$os" in
+    linux)
+      case "$arch" in
+        x86_64) echo "x86_64-unknown-linux-musl" ;;
+        aarch64|arm64) echo "aarch64-unknown-linux-musl" ;;
+        armv7l|armhf) echo "armv7-unknown-linux-musleabihf" ;;
+        riscv64) echo "riscv64gc-unknown-linux-gnu" ;;
+        *) fail "unsupported Linux architecture: $arch" ;;
+      esac
+      ;;
+    darwin)
+      case "$arch" in
+        x86_64) echo "x86_64-apple-darwin" ;;
+        arm64) echo "aarch64-apple-darwin" ;;
+        *) fail "unsupported macOS architecture: $arch" ;;
+      esac
+      ;;
+    *)
+      fail "unsupported operating system: $os"
+      ;;
+  esac
 }
-trap cleanup EXIT
 
-if ! run_as_builder bash -c 'command -v cargo >/dev/null 2>&1'; then
-  log "installing the stable Rust toolchain for $build_user"
-  rustup_installer="$(mktemp)"
-  curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o "$rustup_installer"
-  chown "$build_user:$build_group" "$rustup_installer"
-  chmod 0700 "$rustup_installer"
-  run_as_builder "$rustup_installer" -y --profile minimal --default-toolchain stable
-fi
+install_prebuilt_binary() {
+  local target latest_tag download_url temp_dir checksum_file actual_sha expected_sha
+  target="$(detect_target)"
+  log "detecting pre-built binary for target: $target"
 
-if run_as_builder bash -c 'command -v rustup >/dev/null 2>&1'; then
-  log "selecting the stable Rust toolchain for $build_user"
-  run_as_builder rustup toolchain install stable --profile minimal
-  run_as_builder rustup default stable
-  cargo_command=(cargo +stable)
-else
-  cargo_command=(cargo)
-fi
+  command -v curl >/dev/null 2>&1 || fail "curl is required to download the pre-built binary"
+  command -v tar >/dev/null 2>&1 || fail "tar is required to unpack the pre-built binary"
 
-source_parent="$(dirname "$source_dir")"
-[[ -d "$source_parent" ]] || install -d -m 0755 "$source_parent"
-[[ ! -L "$source_dir" ]] || fail "source path must not be a symbolic link: $source_dir"
+  latest_tag="$(curl -sL "https://api.github.com/repos/${BLIP_GITHUB_REPO}/releases/latest" | grep -m1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+  [[ -n "$latest_tag" ]] || fail "could not retrieve latest release tag from ${BLIP_GITHUB_REPO}"
 
-if [[ -e "$source_dir" && ! -d "$source_dir/.git" ]]; then
-  if [[ ! -d "$source_dir" || -n "$(find "$source_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
-    fail "source path exists but is not an empty directory or Git checkout: $source_dir"
+  log "downloading Blip pre-built release: $latest_tag"
+  download_url="https://github.com/${BLIP_GITHUB_REPO}/releases/download/${latest_tag}/blip-${target}.tar.gz"
+  temp_dir="$(mktemp -d)"
+
+  curl -fsSL "$download_url" -o "$temp_dir/blip-${target}.tar.gz"
+  curl -fsSL "https://github.com/${BLIP_GITHUB_REPO}/releases/download/${latest_tag}/SHA256SUMS.txt" -o "$temp_dir/SHA256SUMS.txt" || true
+
+  if [[ -f "$temp_dir/SHA256SUMS.txt" ]] && command -v sha256sum >/dev/null 2>&1; then
+    expected_sha="$(grep "blip-${target}.tar.gz" "$temp_dir/SHA256SUMS.txt" | awk '{print $1}' || true)"
+    if [[ -n "$expected_sha" ]]; then
+      actual_sha="$(sha256sum "$temp_dir/blip-${target}.tar.gz" | awk '{print $1}')"
+      [[ "$actual_sha" == "$expected_sha" ]] || fail "checksum verification failed for blip-${target}.tar.gz"
+      log "checksum verified ($actual_sha)"
+    fi
   fi
-fi
 
-if [[ ! -d "$source_dir/.git" ]]; then
-  log "cloning Blip into $source_dir"
-  install -d -m 0755 -o "$build_user" -g "$build_group" "$source_dir"
-  run_as_builder git clone --branch "$repo_branch" --single-branch "$repo_url" "$source_dir"
+  tar -xzf "$temp_dir/blip-${target}.tar.gz" -C "$temp_dir"
+  install -m 0755 "$temp_dir/blip-${target}/blip" "$BLIP_BINARY_PATH"
+  rm -rf "$temp_dir"
+}
+
+if [[ "$install_method" == "binary" ]]; then
+  install_prebuilt_binary
 else
-  current_origin="$(run_as_builder git -C "$source_dir" remote get-url origin)"
-  [[ "$current_origin" == "$repo_url" ]] || \
-    fail "source checkout origin is $current_origin, expected $repo_url"
-  [[ -z "$(run_as_builder git -C "$source_dir" status --porcelain)" ]] || \
-    fail "source checkout contains local changes: $source_dir"
-  log "updating the existing source checkout"
-  run_as_builder git -C "$source_dir" fetch origin "$repo_branch"
-  if run_as_builder git -C "$source_dir" show-ref --verify --quiet "refs/heads/$repo_branch"; then
-    run_as_builder git -C "$source_dir" switch "$repo_branch"
+  missing_build_tool=0
+  for command_name in git curl cc; do
+    command -v "$command_name" >/dev/null 2>&1 || missing_build_tool=1
+  done
+  if [[ "$missing_build_tool" -eq 1 ]]; then
+    log "installing native build dependencies"
+    install_build_dependencies
+  fi
+
+  for command_name in getent grep install runuser systemctl; do
+    command -v "$command_name" >/dev/null 2>&1 || fail "required command is missing: $command_name"
+  done
+
+  rustup_installer=""
+  cleanup() {
+    [[ -z "$rustup_installer" || ! -f "$rustup_installer" ]] || rm -f -- "$rustup_installer"
+  }
+  trap cleanup EXIT
+
+  if ! run_as_builder bash -c 'command -v cargo >/dev/null 2>&1'; then
+    log "installing the stable Rust toolchain for $build_user"
+    rustup_installer="$(mktemp)"
+    curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o "$rustup_installer"
+    chown "$build_user:$build_group" "$rustup_installer"
+    chmod 0700 "$rustup_installer"
+    run_as_builder "$rustup_installer" -y --profile minimal --default-toolchain stable
+  fi
+
+  if run_as_builder bash -c 'command -v rustup >/dev/null 2>&1'; then
+    log "selecting the stable Rust toolchain for $build_user"
+    run_as_builder rustup toolchain install stable --profile minimal
+    run_as_builder rustup default stable
+    cargo_command=(cargo +stable)
   else
-    run_as_builder git -C "$source_dir" switch --create "$repo_branch" --track "origin/$repo_branch"
+    cargo_command=(cargo)
   fi
-  run_as_builder git -C "$source_dir" merge --ff-only "origin/$repo_branch"
-fi
 
-if [[ "$upgrade_only" == "1" ]]; then
-  [[ -f "$BLIP_CONFIG_PATH" ]] || fail "upgrade requires an existing configuration: $BLIP_CONFIG_PATH"
-  installed_service_user="$(systemctl show blip.service --property=User --value)"
-  [[ -n "$installed_service_user" && "$installed_service_user" != "root" ]] || \
-    fail "cannot determine the installed non-root service user"
-fi
+  source_parent="$(dirname "$source_dir")"
+  [[ -d "$source_parent" ]] || install -d -m 0755 "$source_parent"
+  [[ ! -L "$source_dir" ]] || fail "source path must not be a symbolic link: $source_dir"
 
-log "building the release binary"
-run_as_builder "${cargo_command[@]}" build --locked --release --manifest-path "$source_dir/Cargo.toml"
-install -m 0755 "$source_dir/target/release/blip" "$BLIP_BINARY_PATH"
+  if [[ -e "$source_dir" && ! -d "$source_dir/.git" ]]; then
+    if [[ ! -d "$source_dir" || -n "$(find "$source_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+      fail "source path exists but is not an empty directory or Git checkout: $source_dir"
+    fi
+  fi
+
+  if [[ ! -d "$source_dir/.git" ]]; then
+    log "cloning Blip into $source_dir"
+    install -d -m 0755 -o "$build_user" -g "$build_group" "$source_dir"
+    run_as_builder git clone --branch "$repo_branch" --single-branch "$repo_url" "$source_dir"
+  else
+    current_origin="$(run_as_builder git -C "$source_dir" remote get-url origin)"
+    [[ "$current_origin" == "$repo_url" ]] || \
+      fail "source checkout origin is $current_origin, expected $repo_url"
+    [[ -z "$(run_as_builder git -C "$source_dir" status --porcelain)" ]] || \
+      fail "source checkout contains local changes: $source_dir"
+    log "updating the existing source checkout"
+    run_as_builder git -C "$source_dir" fetch origin "$repo_branch"
+    if run_as_builder git -C "$source_dir" show-ref --verify --quiet "refs/heads/$repo_branch"; then
+      run_as_builder git -C "$source_dir" switch "$repo_branch"
+    else
+      run_as_builder git -C "$source_dir" switch --create "$repo_branch" --track "origin/$repo_branch"
+    fi
+    run_as_builder git -C "$source_dir" merge --ff-only "origin/$repo_branch"
+  fi
+
+  log "building the release binary"
+  run_as_builder "${cargo_command[@]}" build --locked --release --manifest-path "$source_dir/Cargo.toml"
+  install -m 0755 "$source_dir/target/release/blip" "$BLIP_BINARY_PATH"
+fi
 
 if [[ "$upgrade_only" == "1" ]]; then
   log "validating existing configuration"

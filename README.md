@@ -29,15 +29,25 @@ See the [configuration reference](docs/wiki/Configuration.md) for global default
 
 ## Install and set up
 
-Prepare the deployment executable first, then copy this command. It works from Bash, Fish, and other interactive shells:
+Prepare the deployment executable first, then choose an installation method.
+
+### Method 1: Compile Source installation
 
 ~~~bash
 curl -fsSL "https://gitlab.com/almateraincubator/utilities/blip/-/raw/dev/docs/install.sh" | sudo bash
 ~~~
 
-The installer obtains the non-root build account from **SUDO_USER**. No user,
-repository, branch, or source-directory argument is required for a standard
-installation.
+The installer obtains the non-root build account from **SUDO_USER**. No user, repository, branch, or source-directory argument is required for a standard installation.
+
+### Method 2: Pre-built binary installation
+
+~~~bash
+curl -fsSL "https://gitlab.com/almateraincubator/utilities/blip/-/raw/dev/docs/install.sh" | sudo env BLIP_INSTALL_METHOD="binary" bash
+~~~
+
+The binary installer detects your host architecture, downloads the matching pre-compiled release archive and checksums, installs the standalone executable, and configures the systemd service without requiring a local Rust toolchain or build tools.
+
+### Initial setup
 
 The first run asks for:
 
@@ -45,7 +55,7 @@ The first run asks for:
 2. The absolute path to the executable script file.
 3. A GitLab Signing token, or a legacy Secret token when no Signing token is supplied.
 
-If the installer finds the obsolete **[[projects]]** schema, the same copy-paste command backs it up and starts the current configuration prompt automatically. After the first installation, use **blip --upgrade** instead of downloading the installer again. Full options are documented in [Installation](docs/wiki/Installation.md).
+If the installer finds the obsolete **[[projects]]** schema, the same command backs it up and starts the current configuration prompt automatically. After the first installation, use **blip --upgrade** instead of downloading the installer again. Full options are documented in [Installation](docs/wiki/Installation.md).
 
 ## Upgrade
 
