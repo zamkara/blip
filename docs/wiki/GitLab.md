@@ -88,7 +88,7 @@ Use **Test → Push events** in GitLab.
 | **400** | The delivery ID is missing, invalid, or conflicts with the legacy ID header. |
 | **401** | Token mismatch, malformed signing key, altered body, missing signing headers, or stale timestamp. |
 | **404** | URL project key does not exist in the TOML map. |
-| **503** | Queue capacity is exhausted, or the durable queue journal is unavailable or malformed. |
+| **503** | Blip is shutting down, queue capacity is exhausted, or the durable queue journal is unavailable or malformed. |
 
 Then inspect:
 

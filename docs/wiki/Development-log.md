@@ -47,3 +47,11 @@ This page preserves early public development summaries. Starting on 2026-09-17, 
 - Made relative runtime paths deterministic so the installed service and CLI inspect the same files regardless of the shell's current directory.
 - Added focused coverage for FIFO execution, exact capacity, concurrent and project-scoped admission, malformed persistence, legacy records, restart recovery, and recovery coordination with another active process.
 - Updated the roadmap and operational documentation to describe durable waiting work and at-least-once interrupted-run recovery.
+
+## 2026-09-18T21:17:32+07:00
+
+- Added graceful SIGTERM and SIGINT handling that finishes the active deployment and leaves waiting entries durable for the next start.
+- Added **blip --upgrade** and **blip -U** for fast-forward source updates, release builds, configuration validation, systemd unit updates, and service restart.
+- Simplified first installation to a direct **curl | sudo bash** command with automatic non-root build-user detection.
+- Fixed service installation to restart an already-running service after replacing its binary.
+- Set the Phase 1 package version to **0.2.0** and documented that Phase 1 remains on **0.x** while Phase 2 begins at **1.0.0**.

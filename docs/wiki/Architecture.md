@@ -50,6 +50,22 @@ Waiting entries remain **queued** and are selected when the service starts again
 
 Recovery is at least once for interrupted execution. A process or host can fail after the script changes external state but before Blip appends **completed**. The recovered entry then runs again. Blip cannot make an arbitrary deployment script transactional, so the script must be idempotent.
 
+## Graceful shutdown
+
+SIGTERM and SIGINT first close webhook admission. Requests that arrive after that point receive **503 shutting down**, while an HTTP request already being handled may finish admission. The HTTP listener then stops accepting connections.
+
+The worker behaves according to its current state:
+
+- an active script is allowed to finish, after which history and **completed** state are persisted;
+- a worker waiting for the global execution lock stops without changing the candidate from **queued**;
+- all other waiting entries remain **queued** and resume at the next startup;
+- no new queued entry starts after shutdown has been observed.
+
+The systemd unit uses **KillMode=mixed**, so the initial stop signal reaches
+Blip without terminating its active deployment child. It has no stop timeout
+because Blip has no execution timeout yet. An operator must therefore handle a
+deployment script that never exits.
+
 ## Global lock
 
 The worker opens one file named **blip.queue.lock** beside the history file and obtains an operating-system advisory exclusive lock before changing an entry from **queued** to **running**. It holds that lock until history and **completed** state are written. Every project uses this same lock.
@@ -84,6 +100,7 @@ A failure may include an **error** string. Command output is not duplicated into
 - Blip does not retry a failed script.
 - An interrupted running script may execute again after restart.
 - Blip does not terminate a long-running script with an internal timeout.
+- Graceful service stop can wait indefinitely for a script that never exits.
 - The append-only queue journal has no retention or compaction yet.
 - Configuration changes require restart.
 

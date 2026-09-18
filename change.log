@@ -257,3 +257,75 @@ Validation recorded:
 State recorded:
 - Follow-up fix is uncommitted and unpushed at this timestamp.
 - The feature branch remains one commit ahead of dev; dev was not modified.
+
+2026-09-18T21:17:32+07:00
+---------------------------------
+Scope: Graceful shutdown, in-place upgrade, and Phase 1 version metadata
+Branch: feature/graceful-shutdown-upgrade
+
+- Added SIGTERM and SIGINT handling that closes webhook admission, finishes
+  the active deployment, and leaves waiting work queued for the next start.
+- Made global-lock waits interruptible during shutdown without changing queue
+  state.
+- Added blip --upgrade and blip -U, backed by an upgrade-only installer path
+  that fast-forwards source, builds as a non-root user, preserves and validates
+  configuration, updates the unit, and restarts the service.
+- Fixed normal service installation to restart an active service after binary
+  replacement.
+- Added KillMode=mixed and an unlimited systemd stop timeout so the active
+  deployment child can finish during graceful shutdown.
+- Simplified the documented first-install command to curl piped directly to
+  sudo bash; the installer derives the build account from SUDO_USER.
+- Updated the package and public status to 0.2.0 and recorded the policy that
+  Phase 1 uses 0.x releases while Phase 2 begins at 1.0.0.
+
+Files modified:
+- AGENTS.md
+- Cargo.lock
+- Cargo.toml
+- README.md
+- change.log
+- docs/install.sh
+- docs/wiki/Architecture.md
+- docs/wiki/Development-log.md
+- docs/wiki/GitLab.md
+- docs/wiki/Home.md
+- docs/wiki/Installation.md
+- docs/wiki/Roadmap.md
+- docs/wiki/Security.md
+- src/main.rs
+- src/runtime.rs
+- src/system.rs
+
+Validation recorded:
+- cargo fmt --all -- --check
+- cargo test --locked --all-targets: 27 passed
+- cargo clippy --locked --all-targets --all-features -- -D warnings
+- cargo build --locked --release
+- bash -n docs/install.sh
+- git diff --check
+- Release CLI inspection reported blip 0.2.0 and exposed -U/--upgrade.
+- Repository identity scan found no personal path, private hostname, tunnel ID,
+  old installer wrapper, or stale 0.1.0 metadata.
+
+State recorded:
+- Changes are uncommitted and unpushed.
+- dev was not modified or merged.
+
+2026-09-18T21:18:12+07:00
+---------------------------------
+Scope: Final validation state
+Branch: feature/graceful-shutdown-upgrade
+
+- Completed the full repository validation gate after all implementation,
+  documentation, installer, service-unit, and change-log updates.
+
+Files modified:
+- change.log
+
+Validation recorded:
+- git diff --check: passed after this final log update.
+
+State recorded:
+- Changes remain uncommitted and unpushed.
+- dev remains untouched.
