@@ -47,6 +47,13 @@ curl -fsSL "https://gitlab.com/almateraincubator/utilities/blip/-/raw/dev/docs/i
 
 The binary installer detects your host architecture, downloads the matching pre-compiled release archive and checksums, installs the standalone executable, and configures the systemd service without requiring a local Rust toolchain or build tools.
 
+### Method 3: Cargo (crates.io)
+
+~~~bash
+cargo install bliper
+sudo blip service install --user "$USER"
+~~~
+
 ### Initial setup
 
 The first run asks for:

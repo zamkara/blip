@@ -358,7 +358,41 @@ Validation recorded:
 - bash -n docs/install.sh
 
 State recorded:
-- Committed locally in one commit on feature/prebuilt-binary-installer.
+- Merged into dev on remote.
+
+2026-09-18T23:08:20+07:00
+---------------------------------
+Scope: Package name bliper for Crates.io publication
+Branch: feature/rename-crate-to-bliper
+
+- Renamed Cargo package to "bliper" to enable Crates.io registration while
+  preserving the output binary name as "blip" via explicit [[bin]] target.
+- Updated Cargo.lock to match package name bliper.
+- Added Cargo (crates.io) installation documentation to README.md and
+  docs/wiki/Installation.md.
+- Added automatic publish-crates job to GitHub Actions workflow on kitchen branch
+  using the Kitchen environment.
+
+Files modified:
+- Cargo.toml
+- Cargo.lock
+- README.md
+- docs/wiki/Installation.md
+- change.log
+
+Validation recorded:
+- git diff --check
+- cargo fmt --all -- --check
+- cargo test --locked --all-targets: 27 passed
+- cargo clippy --locked --all-targets --all-features -- -D warnings
+- cargo build --locked --release
+- cargo package verification: passed
+- bash -n docs/install.sh
+
+State recorded:
+- Committed locally in one commit on feature/rename-crate-to-bliper.
 - Not pushed.
 - dev remains untouched.
+
+
 

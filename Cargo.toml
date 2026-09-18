@@ -1,12 +1,17 @@
 [package]
-name = "blip"
+name = "bliper"
 version = "0.2.0"
 edition = "2021"
 description = "Self-hosted GitLab webhook deployment queue"
 license-file = "LICENSE"
 repository = "https://gitlab.com/almateraincubator/utilities/blip"
+readme = "README.md"
 keywords = ["deployment", "gitlab", "systemd", "webhook"]
 categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "blip"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
