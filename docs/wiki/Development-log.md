@@ -36,3 +36,13 @@ This page preserves early public development summaries. Starting on 2026-09-17, 
 - Added **202 duplicate**, malformed-ID handling, delivery-ID history correlation, and registry inspection through **blip queue**.
 - Added tests for concurrent claims, queued duplicates, completed duplicates, project scoping, and persistence across service reconstruction.
 - Updated the README, runtime architecture, GitLab guide, installation paths, security notes, and roadmap.
+
+## 2026-09-18T20:34:29+07:00
+
+- Replaced the process-local waiting queue with an append-only durable FIFO journal.
+- Persisted queued, running, and completed delivery state with a stable sequence and the admitted script path.
+- Added startup recovery for queued and interrupted running work while preserving the single global execution lock.
+- Preserved old delivery-registry records as completed deduplication records.
+- Extended queue inspection with queued, running, and completed counts.
+- Added focused coverage for FIFO execution, exact capacity, concurrent and project-scoped admission, malformed persistence, legacy records, restart recovery, and recovery coordination with another active process.
+- Updated the roadmap and operational documentation to describe durable waiting work and at-least-once interrupted-run recovery.

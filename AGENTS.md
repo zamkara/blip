@@ -77,6 +77,8 @@ The following behavior is implemented and must remain covered by tests:
 - support for multiple space-separated signatures;
 - keyed multi-project configuration;
 - global queue capacity of 128 waiting jobs;
+- durable FIFO queue state across service restarts;
+- startup recovery of interrupted running jobs under the global execution lock;
 - serial script execution under one advisory execution lock;
 - persistent delivery-ID claims using `webhook-id`;
 - `Idempotency-Key` fallback for legacy GitLab deliveries;
@@ -89,12 +91,14 @@ The following behavior is implemented and must remain covered by tests:
 Runtime files derived from the history directory are:
 
 - `blip-history.jsonl`: execution results;
-- `blip-deliveries.jsonl`: accepted GitLab delivery IDs;
+- `blip-deliveries.jsonl`: durable delivery queue and accepted-ID journal;
 - `blip.queue.lock`: the global advisory execution lock.
 
-The delivery registry is data, not another execution lock. It may be locked
-briefly while an ID is checked and appended. A service restart can still lose a
-waiting in-memory job; durable queue recovery remains separate roadmap work.
+The delivery journal is data, not another execution lock. It may be locked
+briefly while state is checked and appended. Waiting jobs survive a service
+restart. A job left in the running state is requeued at startup only after Blip
+obtains the global execution lock, preventing recovery from racing another live
+Blip process.
 
 ## Repository layout
 
@@ -243,7 +247,7 @@ Never solve a protected-branch problem by pushing to `dev`.
 - Perform blocking filesystem locking and scans through `spawn_blocking` rather
   than blocking Tokio worker threads.
 - Authenticate before delivery admission.
-- Persist a delivery claim before queueing a new execution.
+- Persist queued delivery state before returning successful admission.
 - Fail closed when authentication or persistent deduplication state cannot be
   trusted.
 - Use constant-time comparisons for credentials and signatures.
@@ -276,6 +280,9 @@ credentials by default. Revealing secrets must require an explicit option.
 ## Queue, locking, and delivery rules
 
 - Maintain FIFO admission for new deliveries.
+- Persist queued, running, and completed state in the delivery journal.
+- Recover interrupted running entries only while holding the global execution
+  lock.
 - Never allow two deployment scripts to run concurrently when they share the
   runtime directory.
 - Keep one global execution lock, regardless of project count.
@@ -292,7 +299,8 @@ credentials by default. Revealing secrets must require an explicit option.
 
 Do not claim exactly-once external side effects. A crash around process
 execution cannot make an arbitrary deployment script transactional. Describe
-the implemented guarantee precisely as delivery admission deduplication.
+the implemented guarantee precisely as durable delivery admission
+deduplication with at-least-once recovery for interrupted execution.
 
 ## CLI and systemd rules
 
@@ -373,7 +381,7 @@ Also perform focused tests for the changed behavior. Examples:
 
 - authentication changes: valid, invalid, stale, altered-body, and multiple
   signature cases;
-- queue changes: capacity, FIFO, concurrency, and closed-worker behavior;
+- queue changes: capacity, FIFO, concurrency, persistence, and restart recovery;
 - deduplication changes: first claim, concurrent claim, queued duplicate,
   completed duplicate, project scoping, malformed persistence, and restart;
 - configuration changes: parse, validate, render, redact, save, and old-data

@@ -170,3 +170,55 @@ Validation recorded:
 State recorded:
 - All working-tree files are scheduled for local commits only.
 - No push or merge is part of this operation.
+
+2026-09-18T20:34:29+07:00
+---------------------------------
+Scope: Durable queue persistence and restart recovery
+Branch: feature/durable-queue-recovery
+
+- Replaced the process-local channel with an append-only durable FIFO journal
+  containing queued, running, and completed delivery state.
+- Persisted the admitted script path and a monotonic sequence before returning
+  HTTP 202 queued.
+- Recovered waiting work after restart and requeued interrupted running work
+  only while holding the global execution lock.
+- Preserved legacy accepted-delivery records as completed deduplication data.
+- Added queue-state counts to the CLI and kept the waiting capacity at 128.
+- Added focused tests for FIFO order, exact capacity, completed duplicates,
+  concurrent claims, project scoping, malformed persistence, legacy records,
+  restart recovery, and recovery coordination with an active process.
+- Updated public documentation, repository rules, and the roadmap to distinguish
+  durable admission from at-least-once recovery of interrupted execution.
+- A read-only host check found the installed Blip origin healthy. External
+  webhook testing remains unavailable until the tunnel connector is running;
+  no DNS change is required solely because the host IP changed.
+
+Files modified:
+- .gitignore
+- AGENTS.md
+- README.md
+- change.log
+- docs/wiki/Architecture.md
+- docs/wiki/Configuration.md
+- docs/wiki/Development-log.md
+- docs/wiki/GitLab.md
+- docs/wiki/Home.md
+- docs/wiki/Installation.md
+- docs/wiki/Roadmap.md
+- docs/wiki/Security.md
+- src/main.rs
+- src/runtime.rs
+
+Validation recorded:
+- cargo fmt --all -- --check
+- cargo test --locked --all-targets: 19 passed
+- cargo clippy --locked --all-targets --all-features -- -D warnings
+- cargo build --locked --release
+- bash -n docs/install.sh
+- git diff --check
+- Repository identity scan found no personal path, private hostname, tunnel ID,
+  or real webhook credential in tracked changes.
+
+State recorded:
+- Changes are uncommitted and unpushed.
+- dev was not modified or merged.

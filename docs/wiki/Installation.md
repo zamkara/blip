@@ -65,7 +65,7 @@ No installer setting exists for provider, event, branch, tracking, timeout, or l
 | **/etc/blip/blip.toml** | Central configuration |
 | **/etc/systemd/system/blip.service** | systemd unit |
 | **/var/lib/blip/blip-history.jsonl** | Default basic history |
-| **/var/lib/blip/blip-deliveries.jsonl** | Persistent accepted-delivery registry |
+| **/var/lib/blip/blip-deliveries.jsonl** | Durable delivery queue and accepted-ID journal |
 | **/var/lib/blip/blip.queue.lock** | Single advisory queue lock |
 
 The lock file appears after the first execution and may remain present. Its existence alone does not mean the queue is locked.
@@ -145,4 +145,4 @@ Check **systemctl is-active blip** and confirm that **127.0.0.1:8080** is listen
 blip service uninstall
 ~~~
 
-This removes only the systemd unit. Configuration, history, lock, source checkout, and binary are preserved.
+This removes only the systemd unit. Configuration, history, delivery journal, lock, source checkout, and binary are preserved.

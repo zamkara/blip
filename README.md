@@ -2,7 +2,7 @@
 
 Blip turns an authenticated GitLab webhook delivery into one local executable run. GitLab decides which event and branch may send the webhook; Blip verifies the request, rejects duplicate delivery IDs, places new deliveries in a single queue, and runs the configured script file.
 
-> **Status:** early MVP. The current release provides the GitLab template, management CLI, systemd installation, serial execution, logs, and basic history. Additional Git hosts and the remaining roadmap items are planned work.
+> **Status:** early MVP. The current release provides the GitLab template, management CLI, systemd installation, a durable serial queue, logs, and basic history. Additional Git hosts and the remaining roadmap items are planned work.
 
 ## Why Blip
 
@@ -62,7 +62,9 @@ The merge updates **dev**, GitLab emits the selected push webhook, and Blip queu
 
 ## Queue and lock
 
-Accepted delivery IDs are written to **blip-deliveries.jsonl** beside the history file before the request enters the bounded in-memory queue. A retry with the same GitLab **webhook-id** receives **202 duplicate** and does not run the script again, including after service restart. One worker consumes the queue, so scripts never run in parallel. Before each run, the worker obtains one advisory lock named **blip.queue.lock**. This also serializes execution if two Blip processes accidentally use the same runtime directory. The lock is released by the operating system if a process exits.
+Accepted deliveries are appended to **blip-deliveries.jsonl** beside the history file before Blip returns **202 queued**. The journal stores FIFO sequence and **queued**, **running**, or **completed** state. Waiting entries survive a service restart. An entry interrupted while running returns to the queue at startup after Blip obtains the global execution lock.
+
+A retry with the same GitLab **webhook-id** receives **202 duplicate** and does not create another queue entry. One worker consumes the queue, and **blip.queue.lock** prevents scripts from overlapping even if two Blip processes use the same runtime directory. A script interrupted by process or host failure may run again, so deployment scripts must remain idempotent.
 
 ## CLI
 
@@ -101,7 +103,7 @@ The installed config is detected automatically. Use global **--config FILE** for
 | **400 Bad Request** | The GitLab delivery ID is missing, invalid, or conflicting. |
 | **401 Unauthorized** | GitLab authentication failed. |
 | **404 Not Found** | The project key is not configured. |
-| **503 Service Unavailable** | The in-memory queue is full or closed. |
+| **503 Service Unavailable** | The 128-entry waiting queue is full, or the durable queue journal cannot be trusted. |
 
 **202** does not mean deployment succeeded. Check **blip history** or **blip logs**.
 

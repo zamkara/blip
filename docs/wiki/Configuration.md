@@ -26,9 +26,10 @@ Both global settings are optional:
 The installed systemd service uses **/var/lib/blip** as its working directory. Defaults therefore produce:
 
 - History: **/var/lib/blip/blip-history.jsonl**
+- Durable queue journal: **/var/lib/blip/blip-deliveries.jsonl**
 - Global advisory lock: **/var/lib/blip/blip.queue.lock**
 
-The lock path is derived internally from the history directory. It is never configured per project.
+The queue journal and lock paths are derived internally from the history directory. They are never configured per project.
 
 ## Project key
 
