@@ -1,6 +1,8 @@
 name: Build & Release Kitchen
 
 on:
+  repository_dispatch:
+    types: [kitchen_bake]
   push:
     branches:
       - dev
