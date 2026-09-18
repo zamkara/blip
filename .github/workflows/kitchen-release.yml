@@ -214,6 +214,7 @@ jobs:
         run: |
           echo "$CHANGELOG" > release_notes.md
           gh release create "$TAG_NAME" release-assets/* \
+            --repo "${{ github.repository }}" \
             --target kitchen \
             --title "$RELEASE_NAME" \
             --notes-file release_notes.md \
