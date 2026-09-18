@@ -1,0 +1,174 @@
+name: Build & Release Kitchen
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    name: Prepare Release Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      changelog: ${{ steps.meta.outputs.changelog }}
+      commit_hash: ${{ steps.meta.outputs.commit_hash }}
+    steps:
+      - name: Checkout dev branch
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 50
+
+      - name: Generate Release Metadata & Changelog
+        id: meta
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          FULL_SHA=$(git rev-parse HEAD)
+          DATE_STR=$(date -u +"%Y%m%d-%H%M%S")
+          TAG_NAME="build-${DATE_STR}-${SHORT_SHA}"
+          RELEASE_NAME="Build ${DATE_STR} (${SHORT_SHA})"
+          
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${RELEASE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "commit_hash=${FULL_SHA}" >> "$GITHUB_OUTPUT"
+          
+          # Generate changelog from recent commits
+          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+          echo "### 📦 Build Details" >> "$GITHUB_OUTPUT"
+          echo "- **Target Branch:** \`dev\`" >> "$GITHUB_OUTPUT"
+          echo "- **Commit:** [${FULL_SHA}](https://github.com/${{ github.repository }}/commit/${FULL_SHA})" >> "$GITHUB_OUTPUT"
+          echo "- **Date:** $(date -u)" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "### 📝 Recent Changes on \`dev\`" >> "$GITHUB_OUTPUT"
+          git log -n 15 --pretty=format:"* %h - %s (%an)" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+  build-and-package:
+    name: Build (${{ matrix.target }})
+    needs: prepare-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux GNU Targets
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+          - target: armv7-unknown-linux-gnueabihf
+            os: ubuntu-latest
+            use_cross: true
+          # Linux musl Targets (Static)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+            use_cross: true
+          - target: riscv64gc-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+          # macOS
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            use_cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+
+    steps:
+      - name: Checkout dev branch
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (for cross-compilation)
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build Binary (Native)
+        if: ${{ !matrix.use_cross }}
+        run: cargo build --release --target ${{ matrix.target }} --locked
+
+      - name: Build Binary (Cross)
+        if: matrix.use_cross
+        run: cross build --release --target ${{ matrix.target }} --locked
+
+      - name: Archive and Checksum Artifacts
+        id: package
+        shell: bash
+        run: |
+          BIN_NAME="blip"
+          PKG_NAME="blip-${{ matrix.target }}"
+          
+          mkdir -p "pkg/${PKG_NAME}"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "pkg/${PKG_NAME}/"
+          cp README.md LICENSE "pkg/${PKG_NAME}/" 2>/dev/null || true
+          
+          cd pkg
+          tar -czvf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
+          sha256sum "${PKG_NAME}.tar.gz" > "${PKG_NAME}.tar.gz.sha256"
+          cd ..
+          
+          echo "archive=pkg/${PKG_NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "checksum=pkg/${PKG_NAME}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: |
+            pkg/*.tar.gz
+            pkg/*.sha256
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [prepare-release, build-and-package]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+          pattern: artifacts-*
+          merge-multiple: true
+
+      - name: Create Checksums File
+        run: |
+          mkdir -p release-assets
+          mv downloaded-artifacts/* release-assets/
+          cd release-assets
+          cat *.sha256 > SHA256SUMS.txt
+          rm -f *.sha256
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.tag_name }}
+          name: ${{ needs.prepare-release.outputs.release_name }}
+          body: ${{ needs.prepare-release.outputs.changelog }}
+          target_commitish: dev
+          draft: false
+          prerelease: false
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
