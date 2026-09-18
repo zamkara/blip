@@ -42,7 +42,7 @@ The installer uses **NoNewPrivileges=true** and a restrictive umask. Stronger sy
 - Make it an absolute, administrator-controlled executable file.
 - Set its working directory explicitly.
 - Validate the repository remote, branch, and expected revision before deployment.
-- Keep repeated runs safe as defense in depth; Blip deduplicates accepted GitLab delivery IDs, but deployment scripts still own application-level idempotency.
+- Keep repeated runs safe. Blip deduplicates accepted GitLab delivery IDs, but an execution interrupted before completion is durably recorded may run again after restart.
 - Handle build failure, health checking, and rollback inside the script.
 - Avoid printing credentials; stdout and stderr are stored in journald.
 - Do not allow untrusted users to modify the file.
@@ -56,7 +56,7 @@ One advisory lock coordinates the global queue. Do not delete **blip.queue.lock*
 ## Known gaps
 
 - No request body limit or rate limiter.
-- No durable queue; accepted IDs remain deduplicated even when a waiting in-memory job is lost during restart.
+- No exactly-once guarantee for external script side effects; interrupted running entries use at-least-once recovery.
 - No execution timeout, cancellation, or process-group control.
 - No per-project Unix identity or process sandbox.
 - No history retention or structured log redaction.

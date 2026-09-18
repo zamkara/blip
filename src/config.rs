@@ -78,7 +78,8 @@ pub fn resolve_path(requested: Option<PathBuf>) -> PathBuf {
 pub fn load(path: &Path) -> Result<Config> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
-    let config: Config = toml::from_str(&text).context("parse TOML")?;
+    let mut config: Config = toml::from_str(&text).context("parse TOML")?;
+    config.history_file = resolve_history_file(path, &config.history_file);
     validate(&config)?;
     Ok(config)
 }
@@ -87,7 +88,25 @@ pub fn load_or_default(path: &Path) -> Result<Config> {
     if path.exists() {
         load(path)
     } else {
-        Ok(Config::default())
+        let mut config = Config::default();
+        config.history_file = resolve_history_file(path, &config.history_file);
+        Ok(config)
+    }
+}
+
+fn resolve_history_file(config_path: &Path, history_file: &Path) -> PathBuf {
+    if history_file.is_absolute() {
+        return history_file.to_path_buf();
+    }
+    if config_path == Path::new("/etc/blip/blip.toml") {
+        return Path::new("/var/lib/blip").join(history_file);
+    }
+    match config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        Some(parent) => parent.join(history_file),
+        None => history_file.to_path_buf(),
     }
 }
 
@@ -293,5 +312,30 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert!(loaded.projects.contains_key("example-app"));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn history_path_is_stable_for_system_and_local_configs() {
+        assert_eq!(
+            resolve_history_file(
+                Path::new("/etc/blip/blip.toml"),
+                Path::new("blip-history.jsonl"),
+            ),
+            PathBuf::from("/var/lib/blip/blip-history.jsonl")
+        );
+        assert_eq!(
+            resolve_history_file(
+                Path::new("/srv/blip/config/blip.toml"),
+                Path::new("runtime/history.jsonl"),
+            ),
+            PathBuf::from("/srv/blip/config/runtime/history.jsonl")
+        );
+        assert_eq!(
+            resolve_history_file(
+                Path::new("/etc/blip/blip.toml"),
+                Path::new("/data/blip/history.jsonl"),
+            ),
+            PathBuf::from("/data/blip/history.jsonl")
+        );
     }
 }

@@ -1,7 +1,7 @@
 /target/
 /blip.toml
 /blip-history.jsonl
-/blip.queue.lock
+blip.queue.lock
 *.jsonl
 *.log
 !/change.log

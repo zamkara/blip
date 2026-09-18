@@ -21,14 +21,15 @@ Both global settings are optional:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | **bind** | **127.0.0.1:8080** | Local HTTP listener. Keep loopback when a reverse proxy or tunnel runs on the same host. |
-| **history_file** | **blip-history.jsonl** | Basic execution history. Relative paths resolve from Blip's working directory. |
+| **history_file** | **blip-history.jsonl** | Basic execution history. Relative paths resolve from the configuration directory, except the system configuration uses **/var/lib/blip**. |
 
-The installed systemd service uses **/var/lib/blip** as its working directory. Defaults therefore produce:
+The installed configuration at **/etc/blip/blip.toml** resolves its default runtime path under **/var/lib/blip** for both the service and CLI commands. Defaults therefore produce:
 
 - History: **/var/lib/blip/blip-history.jsonl**
+- Durable queue journal: **/var/lib/blip/blip-deliveries.jsonl**
 - Global advisory lock: **/var/lib/blip/blip.queue.lock**
 
-The lock path is derived internally from the history directory. It is never configured per project.
+The queue journal and lock paths are derived internally from the history directory. They are never configured per project.
 
 ## Project key
 

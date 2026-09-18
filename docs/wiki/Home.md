@@ -36,7 +36,7 @@ The root contains project metadata, repository instructions, the canonical chang
 ## Responsibility boundary
 
 - GitLab owns event selection, branch filtering, retries, and delivery configuration.
-- Blip owns authentication, queue admission, serial execution, and basic history.
+- Blip owns authentication, durable queue admission, serial execution, and basic history.
 - The configured executable file owns checkout, build, deployment, health checks, and rollback.
 
 This boundary avoids reproducing GitLab's webhook form inside Blip configuration.

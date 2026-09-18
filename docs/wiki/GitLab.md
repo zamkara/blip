@@ -59,9 +59,9 @@ GitLab may send multiple space-separated signatures; Blip accepts the request wh
 
 ## Delivery ID and retries
 
-GitLab sends a **webhook-id** that remains unchanged across retries. Blip records that ID before queueing the script. A repeated delivery receives **202 duplicate** and does not create another execution. For legacy deliveries without **webhook-id**, Blip accepts **Idempotency-Key**; when both headers are present, their values must match.
+GitLab sends a **webhook-id** that remains unchanged across retries. Blip records the ID and durable queued state before returning **202 queued**. A repeated delivery receives **202 duplicate** and does not create another execution. For legacy deliveries without **webhook-id**, Blip accepts **Idempotency-Key**; when both headers are present, their values must match.
 
-The registry is persisted beside execution history, so restarting Blip does not make an accepted delivery new again. The delivery ID is also included in the corresponding history record for correlation with GitLab's Recent events page.
+The journal is persisted beside execution history. Waiting deliveries resume after restart, and a delivery interrupted while running is requeued after startup obtains the global execution lock. The delivery ID is included in the corresponding history record for correlation with GitLab's Recent events page. Because a host can fail after a script changes external state but before completion is persisted, deployment scripts must tolerate a repeated run.
 
 ## Secret token compatibility
 
@@ -88,7 +88,7 @@ Use **Test → Push events** in GitLab.
 | **400** | The delivery ID is missing, invalid, or conflicts with the legacy ID header. |
 | **401** | Token mismatch, malformed signing key, altered body, missing signing headers, or stale timestamp. |
 | **404** | URL project key does not exist in the TOML map. |
-| **503** | Queue capacity is exhausted. |
+| **503** | Queue capacity is exhausted, or the durable queue journal is unavailable or malformed. |
 
 Then inspect:
 

@@ -10,9 +10,7 @@ Project map lookup
   ▼
 GitLab template authentication
   ▼
-Persistent delivery-ID claim
-  ▼
-Bounded queue (128 waiting entries)
+Durable FIFO admission (128 waiting entries)
   ▼
 One worker
   ▼
@@ -27,13 +25,14 @@ Blip does not parse the event or branch. GitLab decides whether to send the requ
 
 ## Queue ownership
 
-The service owns one FIFO in-memory queue. A successful authentication attempts immediate admission:
+The service owns one global FIFO queue backed by **blip-deliveries.jsonl**. Its location is derived from the resolved history directory, so the service and management CLI inspect the same runtime state. A successful authentication attempts one atomic admission:
 
-- New delivery with space available: persist its ID and return **202 queued**.
+- New delivery with space available: append its ID, script path, sequence, and **queued** state, then return **202 queued**.
 - Previously accepted project and delivery ID: return **202 duplicate** without queueing it again.
-- Queue full or worker unavailable: return **503 Service Unavailable**.
+- Waiting capacity exhausted: return **503 Service Unavailable**.
+- Journal unavailable or malformed: return **503 Service Unavailable** without accepting the delivery.
 
-One worker removes entries and waits for each executable to finish before starting the next. Projects cannot run in parallel.
+The queue permits 128 entries in **queued** state. A currently **running** entry does not consume waiting capacity. One worker selects the lowest persisted sequence and waits for its executable to finish before starting the next. Projects cannot run in parallel.
 
 The queue is intentionally global rather than one queue per project. This protects a small host from several deployments competing for CPU, memory, disk I/O, package-manager databases, or build caches.
 
@@ -41,13 +40,19 @@ The queue is intentionally global rather than one queue per project. This protec
 
 GitLab's **webhook-id** is stable across retries. Blip uses it as the delivery ID and accepts the legacy **Idempotency-Key** header when **webhook-id** is absent. If both headers are present, they must match.
 
-Before queueing a new request, Blip atomically appends the project key, delivery ID, and acceptance time to **blip-deliveries.jsonl** beside the history file. The registry file itself is locked only while it is inspected or appended; **blip.queue.lock** remains the only execution lock. This prevents concurrent Blip processes sharing the runtime directory from claiming the same delivery.
+Before acknowledging a new request, Blip appends its project key, delivery ID, script path, FIFO sequence, timestamps, and **queued** state to **blip-deliveries.jsonl** beside the history file. State transitions append another record for the same project and delivery ID; the latest record is authoritative. The journal file is locked only while it is inspected or appended. **blip.queue.lock** remains the only execution lock.
 
-The registry survives service restarts. Delivery IDs are scoped by project, so an identical ID used for another project remains independent. A malformed or unavailable registry produces **503** instead of risking a duplicate run.
+The journal serves both queue persistence and admission deduplication. Delivery IDs are scoped by project, so an identical ID used for another project remains independent. Existing registry records from releases before durable queue state are read as completed deliveries and remain deduplicated. A malformed or unavailable journal fails closed instead of risking a duplicate run.
+
+## Restart recovery
+
+Waiting entries remain **queued** and are selected when the service starts again. Before accepting traffic, Blip obtains **blip.queue.lock** and changes any leftover **running** entries back to **queued**. Taking the execution lock first distinguishes a crashed process from another live Blip process that is still executing a script.
+
+Recovery is at least once for interrupted execution. A process or host can fail after the script changes external state but before Blip appends **completed**. The recovered entry then runs again. Blip cannot make an arbitrary deployment script transactional, so the script must be idempotent.
 
 ## Global lock
 
-The worker opens one file named **blip.queue.lock** beside the history file and obtains an operating-system advisory exclusive lock before each execution. Every project uses this same lock.
+The worker opens one file named **blip.queue.lock** beside the history file and obtains an operating-system advisory exclusive lock before changing an entry from **queued** to **running**. It holds that lock until history and **completed** state are written. Every project uses this same lock.
 
 The file is not a boolean state and is not deleted after each run. The kernel owns the actual lock:
 
@@ -76,10 +81,10 @@ A failure may include an **error** string. Command output is not duplicated into
 
 ## Process boundaries
 
-- The queue is not durable. A service restart loses waiting entries.
-- An accepted delivery remains deduplicated if Blip stops before executing it; durable queue recovery is a separate roadmap item.
 - Blip does not retry a failed script.
+- An interrupted running script may execute again after restart.
 - Blip does not terminate a long-running script with an internal timeout.
+- The append-only queue journal has no retention or compaction yet.
 - Configuration changes require restart.
 
 These are explicit roadmap items rather than hidden configuration switches.

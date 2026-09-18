@@ -16,6 +16,7 @@ The current architecture follows these decisions:
 - GitLab owns event and branch filtering through its webhook form; Blip does not duplicate those rules.
 - A project points to one executable file.
 - All accepted requests share one FIFO queue.
+- Queue state is durable across service restarts.
 - One advisory lock coordinates queue execution across Blip processes.
 - The HTTP request is asynchronous, but the worker waits for each script to preserve serial execution.
 - Basic result history is always recorded; stdout and stderr remain in service logs.
@@ -27,9 +28,10 @@ The current architecture follows these decisions:
 - Timestamp replay window for signed requests.
 - Keyed multi-project TOML configuration.
 - Absolute executable-file validation.
-- 128-entry in-memory queue and one worker.
+- Durable 128-entry waiting queue and one worker.
 - One global advisory lock derived from the runtime directory.
 - Persistent GitLab delivery-ID deduplication using **webhook-id** with legacy **Idempotency-Key** fallback.
+- Recovery of queued and interrupted running deliveries after restart.
 - Success/failure, duration, exit code, and spawn-error history.
 - CLI commands for serving, global configuration, project CRUD, filtered history, logs, queue inspection, and systemd management.
 - One combined installation and setup script for systemd.
@@ -47,8 +49,6 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 
 ### Queue reliability
 
-- Test FIFO order and exact queue capacity.
-- Decide whether waiting entries must survive restart.
 - Add graceful shutdown and queue drain.
 - Record queue rejection and lock wait duration.
 - Add execution timeout and cancellation without allowing the next job to overlap a surviving process.
@@ -68,7 +68,6 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 - Add a dedicated project-edit command; replacement is currently handled by project add with **--replace**.
 - Add enable/disable state per project.
 - Select additional provider templates interactively when they are implemented.
-- Inspect configuration with credentials redacted.
 - Rotate credentials safely.
 - Add history filtering by time; project, result, and limit filters already exist.
 - Add service health details beyond systemd status.
@@ -86,7 +85,7 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 
 - Versioned REST management API in addition to the CLI.
 - Telegram, Discord, and other deployment notifications.
-- Durable retries and queue persistence if operational evidence justifies them.
+- Configurable retry policy if operational evidence justifies it.
 - Optional web dashboard only after API authentication and authorization are stable.
 
 ## Test plan
@@ -99,6 +98,7 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 - Stale timestamp and altered-body rejection.
 - Global lock path and advisory lock behavior.
 - Persistent and concurrent delivery-ID claim behavior.
+- Durable FIFO order, exact waiting capacity, and interrupted-run recovery.
 - History serialization and project filtering.
 
 ### Integration
@@ -107,7 +107,7 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 - FIFO execution across different projects.
 - Two Blip processes sharing one runtime lock.
 - Success, non-zero exit, and spawn failure.
-- Restart with queued work; repeated delivery-ID behavior is covered by the current runtime tests.
+- Restart recovery through the systemd service with queued and interrupted work.
 
 ### End to end
 
