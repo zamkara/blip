@@ -204,17 +204,18 @@ jobs:
           ls -la
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.check-and-prepare.outputs.tag_name }}
-          name: ${{ needs.check-and-prepare.outputs.release_name }}
-          body: ${{ needs.check-and-prepare.outputs.changelog }}
-          target_commitish: dev
-          draft: false
-          prerelease: false
-          files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.check-and-prepare.outputs.tag_name }}
+          RELEASE_NAME: ${{ needs.check-and-prepare.outputs.release_name }}
+          CHANGELOG: ${{ needs.check-and-prepare.outputs.changelog }}
+        run: |
+          echo "$CHANGELOG" > release_notes.md
+          gh release create "$TAG_NAME" release-assets/* \
+            --target dev \
+            --title "$RELEASE_NAME" \
+            --notes-file release_notes.md \
+            --latest
 
   publish-crates:
     name: Publish to Crates.io
