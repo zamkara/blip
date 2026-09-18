@@ -1,8 +1,11 @@
 name: Build & Release Kitchen
 
 on:
+  push:
+    branches:
+      - dev
   schedule:
-    # Run periodically every 15 minutes to check if dev branch has new commits
+    # Backup sync: periodically check every 15 minutes
     - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
