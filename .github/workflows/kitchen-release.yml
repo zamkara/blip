@@ -20,6 +20,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: kitchen-release
+  cancel-in-progress: false
+
 jobs:
   check-and-prepare:
     name: Check Dev & Prepare Release
@@ -31,20 +35,18 @@ jobs:
       changelog: ${{ steps.meta.outputs.changelog }}
       commit_hash: ${{ steps.meta.outputs.commit_hash }}
     steps:
-      - name: Checkout dev branch
-        uses: actions/checkout@v4
-        with:
-          ref: dev
-          fetch-depth: 50
+      - name: Checkout source directly from GitLab
+        run: |
+          git clone --branch dev --single-branch --depth 50 https://gitlab.com/almateraincubator/utilities/blip.git .
 
-      - name: Check if latest commit on dev already released
+      - name: Check if latest commit on GitLab dev already released
         id: check
         run: |
           FULL_SHA=$(git rev-parse HEAD)
           SHORT_SHA=$(git rev-parse --short HEAD)
-          echo "Latest dev commit: $FULL_SHA ($SHORT_SHA)"
+          echo "Latest GitLab dev commit: $FULL_SHA ($SHORT_SHA)"
 
-          # Check existing releases/tags
+          # Check existing releases/tags on GitHub
           TAGS=$(gh release list --limit 100 --json tagName --jq '.[].tagName' || true)
           echo "Existing release tags: $TAGS"
 
@@ -78,15 +80,15 @@ jobs:
           echo "release_name=${RELEASE_NAME}" >> "$GITHUB_OUTPUT"
           echo "commit_hash=${FULL_SHA}" >> "$GITHUB_OUTPUT"
 
-          # Extract Cargo version from dev
+          # Extract Cargo version from GitLab dev
           CARGO_VERSION=$(grep -m1 '^version =' Cargo.toml | cut -d '"' -f 2 || echo "dev")
 
           # Generate changelog from recent commits
           echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
           echo "## 📦 Blip Release (\`v${CARGO_VERSION}\` - \`${SHORT_SHA}\`)" >> "$GITHUB_OUTPUT"
           echo "" >> "$GITHUB_OUTPUT"
-          echo "- **Target Branch:** [\`dev\`](https://github.com/${{ github.repository }}/tree/dev)" >> "$GITHUB_OUTPUT"
-          echo "- **Commit:** [${FULL_SHA}](https://github.com/${{ github.repository }}/commit/${FULL_SHA})" >> "$GITHUB_OUTPUT"
+          echo "- **Source Repository:** [GitLab \`dev\`](https://gitlab.com/almateraincubator/utilities/blip/-/tree/dev)" >> "$GITHUB_OUTPUT"
+          echo "- **Commit:** [${FULL_SHA}](https://gitlab.com/almateraincubator/utilities/blip/-/commit/${FULL_SHA})" >> "$GITHUB_OUTPUT"
           echo "- **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
           echo "" >> "$GITHUB_OUTPUT"
           echo "### 📝 Recent Changes on \`dev\`" >> "$GITHUB_OUTPUT"
@@ -135,10 +137,10 @@ jobs:
             use_cross: false
 
     steps:
-      - name: Checkout dev branch
-        uses: actions/checkout@v4
-        with:
-          ref: dev
+      - name: Clone exact release commit directly from GitLab
+        run: |
+          git clone --branch dev --single-branch https://gitlab.com/almateraincubator/utilities/blip.git .
+          git checkout ${{ needs.check-and-prepare.outputs.commit_hash }}
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -212,7 +214,7 @@ jobs:
         run: |
           echo "$CHANGELOG" > release_notes.md
           gh release create "$TAG_NAME" release-assets/* \
-            --target dev \
+            --target kitchen \
             --title "$RELEASE_NAME" \
             --notes-file release_notes.md \
             --latest
@@ -224,10 +226,10 @@ jobs:
     environment: Kitchen
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout dev branch
-        uses: actions/checkout@v4
-        with:
-          ref: dev
+      - name: Clone exact release commit from GitLab
+        run: |
+          git clone --branch dev --single-branch https://gitlab.com/almateraincubator/utilities/blip.git .
+          git checkout ${{ needs.check-and-prepare.outputs.commit_hash }}
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
