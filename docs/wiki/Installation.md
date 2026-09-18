@@ -1,21 +1,28 @@
 # Installation and service management
 
-The single **docs/install.sh** program bootstraps Blip. It builds Rust as a non-root user and installs the binary. The installer then delegates setup to **blip project add**, **blip config validate**, and **blip service install**.
+The single **docs/install.sh** program bootstraps Blip. It can compile from source or install pre-built release binaries, and then delegates setup to **blip project add**, **blip config validate**, and **blip service install**.
 
 It does not create an application deployment script. Create that executable file first.
 
 ## Install
 
-Copy the complete command:
+### Method 1: Source installation (default)
 
 ~~~bash
 curl -fsSL "https://gitlab.com/almateraincubator/utilities/blip/-/raw/dev/docs/install.sh" | sudo bash
 ~~~
 
-The pipeline explicitly starts Bash as root and works when pasted into Bash,
-Fish, or another interactive shell. The installer obtains the existing
-non-root build account from **SUDO_USER**. Standard installation therefore
-needs no environment variables or command arguments.
+The pipeline explicitly starts Bash as root and works when pasted into Bash, Fish, or another interactive shell. The installer obtains the existing non-root build account from **SUDO_USER**. Standard installation therefore needs no environment variables or command arguments.
+
+### Method 2: Pre-built binary installation (lightweight / fast setup)
+
+~~~bash
+curl -fsSL "https://gitlab.com/almateraincubator/utilities/blip/-/raw/dev/docs/install.sh" | sudo env BLIP_INSTALL_METHOD="binary" bash
+~~~
+
+The installer detects the host operating system and architecture, downloads the release tarball along with **SHA256SUMS.txt**, verifies the checksum, installs the standalone executable, and configures the systemd service without needing a local Rust toolchain or native build dependencies.
+
+### Initial setup prompt
 
 The first run asks only for:
 
@@ -45,6 +52,7 @@ Use **BLIP_SECRET_TOKEN** instead of **BLIP_SIGNING_TOKEN** only for legacy GitL
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| **BLIP_INSTALL_METHOD** | **source** | Installation mode: **source** (compiles from Git) or **binary** (downloads pre-built release). |
 | **BLIP_USER** | **SUDO_USER** | Existing non-root account used for Git and Rust. |
 | **BLIP_SERVICE_USER** | **BLIP_USER** | Non-root account that runs Blip and all deployment scripts. |
 | **BLIP_REPO_URL** | Official HTTPS repository | Mirror or authenticated repository override. |
