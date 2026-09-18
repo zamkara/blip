@@ -2,7 +2,7 @@
 name = "bliper"
 version = "0.2.1"
 edition = "2021"
-description = "Self-hosted GitLab webhook deployment queue"
+description = "Minimal Webhook Delivery Bridge"
 license-file = "LICENSE"
 repository = "https://gitlab.com/almateraincubator/utilities/blip"
 readme = "README.md"
