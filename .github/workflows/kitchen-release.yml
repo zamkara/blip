@@ -216,12 +216,19 @@ jobs:
           CHANGELOG: ${{ needs.check-and-prepare.outputs.changelog }}
         run: |
           echo "$CHANGELOG" > release_notes.md
-          gh release create "$TAG_NAME" release-assets/* \
-            --repo "${{ github.repository }}" \
-            --target dev \
-            --title "$RELEASE_NAME" \
-            --notes-file release_notes.md \
-            --latest
+          if gh release view "$TAG_NAME" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists; uploading missing assets."
+            gh release upload "$TAG_NAME" release-assets/* \
+              --repo "${{ github.repository }}" \
+              --clobber
+          else
+            gh release create "$TAG_NAME" release-assets/* \
+              --repo "${{ github.repository }}" \
+              --target dev \
+              --title "$RELEASE_NAME" \
+              --notes-file release_notes.md \
+              --latest
+          fi
 
   publish-crates:
     name: Publish to Crates.io
@@ -242,8 +249,15 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          if [ -n "$CARGO_REGISTRY_TOKEN" ]; then
-            cargo publish --token "$CARGO_REGISTRY_TOKEN" || echo "Version already published on crates.io."
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN secret is not set in Kitchen environment."
+            exit 1
+          fi
+
+          VERSION=$(grep -m1 '^version =' Cargo.toml | cut -d '"' -f 2)
+          CRATE_URL="https://crates.io/api/v1/crates/bliper/${VERSION}"
+          if curl --fail --silent --show-error "$CRATE_URL" >/dev/null 2>&1; then
+            echo "bliper ${VERSION} is already published on crates.io."
           else
-            echo "CARGO_REGISTRY_TOKEN secret is not set in Kitchen environment."
+            cargo publish --token "$CARGO_REGISTRY_TOKEN"
           fi
