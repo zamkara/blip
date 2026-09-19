@@ -25,7 +25,7 @@ gitlab.signing_token = "whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 - Queue locking is internal and global; it is not project configuration.
 - For an existing webhook, **secret_token** may replace or temporarily accompany **signing_token**.
 
-See the [configuration reference](docs/wiki/Configuration.md) for global defaults and multiple projects.
+See the [configuration reference](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/configuration) for global defaults and multiple projects.
 
 ## Install and set up
 
@@ -54,6 +54,8 @@ cargo install bliper
 sudo blip service install --user "$USER"
 ~~~
 
+Package page: [crates.io/crates/bliper](https://crates.io/crates/bliper).
+
 ### Initial setup
 
 The first run asks for:
@@ -62,7 +64,7 @@ The first run asks for:
 2. The absolute path to the executable script file.
 3. A GitLab Signing token, or a legacy Secret token when no Signing token is supplied.
 
-If the installer finds the obsolete **[[projects]]** schema, the same command backs it up and starts the current configuration prompt automatically. After the first installation, use **blip --upgrade** instead of downloading the installer again. Full options are documented in [Installation](docs/wiki/Installation.md).
+If the installer finds the obsolete **[[projects]]** schema, the same command backs it up and starts the current configuration prompt automatically. After the first installation, use **blip --upgrade** instead of downloading the installer again. Full options are documented in [Installation](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/installation).
 
 ## Upgrade
 
@@ -157,16 +159,19 @@ The binary is written to **target/release/blip**.
 
 ## Documentation
 
-- [Repository instructions](AGENTS.md)
-- [Detailed change log](change.log)
-- [Wiki index](docs/wiki/Home.md)
-- [Installation](docs/wiki/Installation.md)
-- [Configuration](docs/wiki/Configuration.md)
-- [GitLab setup](docs/wiki/GitLab.md)
-- [Runtime and queue](docs/wiki/Architecture.md)
-- [Security](docs/wiki/Security.md)
-- [Roadmap](docs/wiki/Roadmap.md)
-- [Configuration example](docs/examples/blip.toml.example)
+- [Repository instructions](https://gitlab.com/almateraincubator/utilities/blip/-/blob/dev/AGENTS.md)
+- [Detailed change log](https://gitlab.com/almateraincubator/utilities/blip/-/blob/dev/change.log)
+- [GitLab Wiki](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/home)
+- [Installation](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/installation)
+- [Configuration](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/configuration)
+- [GitLab setup](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/gitlab)
+- [GitHub setup](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/github)
+- [Gitea setup](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/gitea)
+- [Codeberg setup](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/codeberg)
+- [Runtime and queue](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/architecture)
+- [Security](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/security)
+- [Roadmap](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/roadmap)
+- [Configuration example](https://gitlab.com/almateraincubator/utilities/blip/-/blob/dev/docs/examples/blip.toml.example)
 
 ## License
 
