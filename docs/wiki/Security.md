@@ -1,10 +1,11 @@
 # Security
 
-Blip converts an Internet request into local process execution. The GitLab settings, Blip configuration, service identity, and executable file form one trust boundary.
+Blip converts an Internet request into local process execution. The Git-host settings, Blip configuration, service identity, and executable file form one trust boundary.
 
 ## Authentication
 
 - Prefer a GitLab Signing token.
+- Use high-entropy webhook secrets for GitHub, Gitea, and Codeberg.
 - Use a different token for every project.
 - Keep **/etc/blip/blip.toml** readable only by root and the service group.
 - Never store real credentials in the repository, shell history, screenshots, logs, or issue reports.
@@ -19,11 +20,13 @@ Configure only events that should execute a deployment and use GitLab's branch f
 
 Anyone able to edit the GitLab webhook can broaden its triggers. Protect Maintainer and Owner access accordingly.
 
+For GitHub, Gitea, and Codeberg, select only required events. GitHub repository webhooks do not provide GitLab's branch-regex control; the deployment executable must remain fixed to the intended branch and safe under extra deliveries.
+
 ## Network
 
 - Keep the default loopback bind when a tunnel or reverse proxy runs locally.
 - Publish only the required HTTPS hostname.
-- Keep SSL verification enabled in GitLab.
+- Keep TLS/SSL verification enabled at the Git host.
 - Add request-size and rate limits at the proxy; Blip does not yet enforce either.
 - Do not expose the listener directly on a public interface unless the host firewall and TLS termination are deliberately configured.
 
@@ -42,7 +45,7 @@ The installer uses **NoNewPrivileges=true** and a restrictive umask. Stronger sy
 - Make it an absolute, administrator-controlled executable file.
 - Set its working directory explicitly.
 - Validate the repository remote, branch, and expected revision before deployment.
-- Keep repeated runs safe. Blip deduplicates accepted GitLab delivery IDs, but an execution interrupted before completion is durably recorded may run again after restart.
+- Keep repeated runs safe. Blip deduplicates accepted provider delivery IDs, but an execution interrupted before completion is durably recorded may run again after restart.
 - Handle build failure, health checking, and rollback inside the script.
 - Avoid printing credentials; stdout and stderr are stored in journald.
 - Do not allow untrusted users to modify the file.
@@ -59,9 +62,8 @@ During graceful shutdown, Blip keeps the global lock until the active script and
 
 - No request body limit or rate limiter.
 - No exactly-once guarantee for external script side effects; interrupted running entries use at-least-once recovery.
-- No execution timeout, cancellation, or process-group control.
+- No execution timeout, cancellation, or process-group control; a non-terminating script can block graceful service stop.
 - No per-project Unix identity or process sandbox.
 - No history retention or structured log redaction.
-- No execution timeout; a non-terminating script can block graceful service stop.
 
 These gaps are listed in the [roadmap](Roadmap.md) and prevent claiming production hardening.

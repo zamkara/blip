@@ -138,6 +138,13 @@ install_prebuilt_binary() {
   rm -rf "$temp_dir"
 }
 
+if [[ "$upgrade_only" == "1" ]]; then
+  [[ -f "$BLIP_CONFIG_PATH" ]] || fail "upgrade requires an existing configuration: $BLIP_CONFIG_PATH"
+  installed_service_user="$(systemctl show blip.service --property=User --value)"
+  [[ -n "$installed_service_user" && "$installed_service_user" != "root" ]] || \
+    fail "cannot determine the installed non-root service user"
+fi
+
 if [[ "$install_method" == "binary" ]]; then
   install_prebuilt_binary
 else
@@ -268,11 +275,13 @@ fi
 if [[ "$configure_required" -eq 1 ]]; then
   project_key="${BLIP_PROJECT_KEY:-}"
   deploy_script="${BLIP_SCRIPT:-}"
+  provider="${BLIP_PROVIDER:-}"
   signing_token="${BLIP_SIGNING_TOKEN:-}"
   secret_token="${BLIP_SECRET_TOKEN:-${BLIP_SECRET:-}}"
 
   prompt_value project_key "Project key used in the webhook URL"
   prompt_value deploy_script "Absolute path to the deployment executable"
+  prompt_value provider "Webhook provider (gitlab, github, gitea, codeberg)" "gitlab"
 
   [[ "$project_key" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || \
     fail "project key may contain only letters, digits, dots, underscores, and hyphens"
@@ -281,6 +290,13 @@ if [[ "$configure_required" -eq 1 ]]; then
   [[ -f "$deploy_script" ]] || fail "deployment executable must be a file: $deploy_script"
   runuser -u "$service_user" -- test -x "$deploy_script" || \
     fail "$service_user cannot execute $deploy_script"
+  case "$provider" in
+    gitlab|github|gitea|codeberg) ;;
+    *) fail "unsupported webhook provider: $provider" ;;
+  esac
+  if [[ "$provider" != "gitlab" && -n "$signing_token" ]]; then
+    fail "BLIP_SIGNING_TOKEN is available only for GitLab"
+  fi
 
   if [[ -f "$BLIP_CONFIG_PATH" ]]; then
     backup_path="$BLIP_CONFIG_PATH.$(date -u +%Y%m%dT%H%M%SZ).bak"
@@ -296,6 +312,9 @@ if [[ "$configure_required" -eq 1 ]]; then
     --key "$project_key"
     --script "$deploy_script"
   )
+  if [[ "$provider" != "gitlab" ]]; then
+    project_command+=(--provider "$provider")
+  fi
   if [[ -n "$signing_token" ]]; then
     project_command+=(--signing-token "$signing_token")
   elif [[ -n "$secret_token" ]]; then

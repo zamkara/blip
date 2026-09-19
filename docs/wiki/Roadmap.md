@@ -14,8 +14,8 @@ The current architecture follows these decisions:
 
 - The project TOML key is the endpoint identity; no duplicate name.
 - Provider behavior is represented by a nested provider-specific template; no generic provider field.
-- GitLab is the first implemented template.
-- GitLab owns event and branch filtering through its webhook form; Blip does not duplicate those rules.
+- GitLab, GitHub, Gitea, and Codeberg have separate implemented templates.
+- Git hosts own event controls and any available branch filtering; Blip does not duplicate those rules.
 - A project points to one executable file.
 - All accepted requests share one FIFO queue.
 - Queue state is durable across service restarts.
@@ -27,6 +27,9 @@ The current architecture follows these decisions:
 
 - GitLab Signing token verification using Standard Webhooks.
 - Optional legacy GitLab Secret token compatibility.
+- GitHub **X-Hub-Signature-256** authentication and **X-GitHub-Delivery** deduplication.
+- Native Gitea **X-Gitea-Signature** authentication and **X-Gitea-Delivery** deduplication.
+- Native Codeberg/Forgejo **X-Forgejo-Signature** authentication and **X-Forgejo-Delivery** deduplication.
 - Timestamp replay window for signed requests.
 - Keyed multi-project TOML configuration.
 - Absolute executable-file validation.
@@ -41,15 +44,6 @@ The current architecture follows these decisions:
 - One combined installation and setup script for systemd.
 
 ## Phase 1 — Complete the initial release
-
-### Provider templates
-
-The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as a separate nested TOML template with only fields required by that provider. Do not reintroduce a generic provider enum into public configuration.
-
-- GitHub: verify **X-Hub-Signature-256**.
-- Gitea: verify **X-Gitea-Signature** or its documented compatible header.
-- Codeberg: implement and test its Gitea-compatible contract.
-- Keep provider fixture tests isolated by template.
 
 ### Queue reliability
 
@@ -70,7 +64,6 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 
 - Add a dedicated project-edit command; replacement is currently handled by project add with **--replace**.
 - Add enable/disable state per project.
-- Select additional provider templates interactively when they are implemented.
 - Rotate credentials safely.
 - Add history filtering by time; project, result, and limit filters already exist.
 - Add service health details beyond systemd status.
@@ -118,17 +111,17 @@ The initial product goal includes GitHub, Gitea, and Codeberg. Implement each as
 
 1. Install from published documentation on a disposable systemd host.
 2. Route an example HTTPS hostname to loopback Blip.
-3. Configure GitLab Push events with the target-branch regex.
+3. Configure the provider webhook, required events, and any available branch filter.
 4. Merge into the target branch.
 5. Verify one history record, one script run, the expected revision, and an identifiable artifact outside the source checkout.
-6. Repeat with an invalid token, wrong branch at GitLab, failing script, duplicate delivery, and service restart.
+6. Repeat with an invalid credential, a failing script, duplicate delivery, and service restart for each provider.
 
 ## Acceptance criteria
 
 The initial release is complete when:
 
 1. Each implemented provider template passes official fixture-based signature tests.
-2. GitLab configuration contains no duplicated event or branch policy.
+2. Blip configuration contains no duplicated event or branch policy.
 3. Every authenticated request is either queued once or rejected with a documented status.
 4. No two scripts run concurrently, including across two Blip processes sharing the runtime directory.
 5. Every completed or failed start produces an accurate history record.

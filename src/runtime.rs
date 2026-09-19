@@ -1,4 +1,7 @@
-use crate::config::{decode_signing_token, Config, GitlabTemplate, Project};
+use crate::config::{
+    decode_signing_token, CodebergTemplate, Config, GiteaTemplate, GithubTemplate, GitlabTemplate,
+    Project,
+};
 use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
@@ -213,14 +216,50 @@ async fn webhook(
         return (StatusCode::NOT_FOUND, "unknown project");
     };
 
-    if !verify_gitlab(&project.gitlab, &headers, &body) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            "invalid GitLab webhook credential",
-        );
+    let authenticated = match (
+        &project.gitlab,
+        &project.github,
+        &project.gitea,
+        &project.codeberg,
+    ) {
+        (Some(template), None, None, None) => verify_gitlab(template, &headers, &body),
+        (None, Some(template), None, None) => verify_github(template, &headers, &body),
+        (None, None, Some(template), None) => verify_gitea(template, &headers, &body),
+        (None, None, None, Some(template)) => verify_codeberg(template, &headers, &body),
+        _ => false,
+    };
+    if !authenticated {
+        return (StatusCode::UNAUTHORIZED, "invalid webhook credential");
     }
 
-    let delivery_id = match gitlab_delivery_id(&headers) {
+    let delivery_id = match (
+        &project.gitlab,
+        &project.github,
+        &project.gitea,
+        &project.codeberg,
+    ) {
+        (Some(_), None, None, None) => gitlab_delivery_id(&headers),
+        (None, Some(_), None, None) => provider_delivery_id(
+            &headers,
+            "x-github-delivery",
+            "missing GitHub delivery ID",
+            "invalid GitHub delivery ID",
+        ),
+        (None, None, Some(_), None) => provider_delivery_id(
+            &headers,
+            "x-gitea-delivery",
+            "missing Gitea delivery ID",
+            "invalid Gitea delivery ID",
+        ),
+        (None, None, None, Some(_)) => provider_delivery_id(
+            &headers,
+            "x-forgejo-delivery",
+            "missing Codeberg delivery ID",
+            "invalid Codeberg delivery ID",
+        ),
+        _ => Err("project provider configuration is invalid"),
+    };
+    let delivery_id = match delivery_id {
         Ok(delivery_id) => delivery_id,
         Err(message) => return (StatusCode::BAD_REQUEST, message),
     };
@@ -240,6 +279,22 @@ async fn webhook(
             )
         }
     }
+}
+
+fn provider_delivery_id(
+    headers: &HeaderMap,
+    header: &'static str,
+    missing: &'static str,
+    invalid: &'static str,
+) -> std::result::Result<String, &'static str> {
+    let value = headers
+        .get(header)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(missing)?;
+    if value.is_empty() || value.len() > MAX_DELIVERY_ID_LENGTH {
+        return Err(invalid);
+    }
+    Ok(value.to_string())
 }
 
 fn gitlab_delivery_id(headers: &HeaderMap) -> std::result::Result<String, &'static str> {
@@ -329,6 +384,64 @@ fn verify_gitlab_signature(
     received_signatures
         .split_ascii_whitespace()
         .any(|candidate| constant_time_eq(candidate.as_bytes(), expected.as_bytes()))
+}
+
+fn verify_github(template: &GithubTemplate, headers: &HeaderMap, body: &[u8]) -> bool {
+    verify_hex_hmac(
+        &template.secret,
+        headers,
+        "x-hub-signature-256",
+        Some("sha256="),
+        body,
+    )
+}
+
+fn verify_gitea(template: &GiteaTemplate, headers: &HeaderMap, body: &[u8]) -> bool {
+    verify_hex_hmac(&template.secret, headers, "x-gitea-signature", None, body)
+}
+
+fn verify_codeberg(template: &CodebergTemplate, headers: &HeaderMap, body: &[u8]) -> bool {
+    verify_hex_hmac(&template.secret, headers, "x-forgejo-signature", None, body)
+}
+
+fn verify_hex_hmac(
+    secret: &str,
+    headers: &HeaderMap,
+    header: &'static str,
+    prefix: Option<&str>,
+    body: &[u8],
+) -> bool {
+    let Some(received) = headers.get(header).and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let encoded = match prefix {
+        Some(prefix) => match received.strip_prefix(prefix) {
+            Some(value) => value,
+            None => return false,
+        },
+        None => received,
+    };
+    let Some(signature) = decode_sha256_hex(encoded) else {
+        return false;
+    };
+    let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&signature).is_ok()
+}
+
+fn decode_sha256_hex(encoded: &str) -> Option<[u8; 32]> {
+    if encoded.len() != 64 {
+        return None;
+    }
+    let mut output = [0_u8; 32];
+    for (index, chunk) in encoded.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+        let high = (chunk[0] as char).to_digit(16)? as u8;
+        let low = (chunk[1] as char).to_digit(16)? as u8;
+        output[index] = (high << 4) | low;
+    }
+    Some(output)
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -856,6 +969,16 @@ mod tests {
         }
     }
 
+    fn gitlab_project() -> Project {
+        Project {
+            script: PathBuf::from("/bin/true"),
+            gitlab: Some(gitlab_template()),
+            github: None,
+            gitea: None,
+            codeberg: None,
+        }
+    }
+
     #[test]
     fn secret_token_verification_uses_the_gitlab_header() {
         let template = gitlab_template();
@@ -932,6 +1055,206 @@ mod tests {
 
         headers.insert("idempotency-key", "current-id".parse().unwrap());
         assert_eq!(gitlab_delivery_id(&headers).unwrap(), "current-id");
+    }
+
+    #[test]
+    fn github_verification_matches_the_official_fixture() {
+        let template = GithubTemplate {
+            secret: "It's a Secret to Everybody".into(),
+        };
+        let body = b"Hello, World!";
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-hub-signature-256",
+            "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17"
+                .parse()
+                .unwrap(),
+        );
+        assert!(verify_github(&template, &headers, body));
+        assert!(!verify_github(&template, &headers, b"altered"));
+        headers.insert(
+            "x-hub-signature-256",
+            "757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17"
+                .parse()
+                .unwrap(),
+        );
+        assert!(!verify_github(&template, &headers, body));
+    }
+
+    #[test]
+    fn gitea_and_codeberg_use_their_native_signature_headers() {
+        let secret = "provider-secret";
+        let body = br#"{"ref":"refs/heads/main"}"#;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        let signature = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+
+        let mut gitea_headers = HeaderMap::new();
+        gitea_headers.insert("x-gitea-signature", signature.parse().unwrap());
+        assert!(verify_gitea(
+            &GiteaTemplate {
+                secret: secret.into()
+            },
+            &gitea_headers,
+            body
+        ));
+        assert!(!verify_gitea(
+            &GiteaTemplate {
+                secret: secret.into()
+            },
+            &gitea_headers,
+            b"altered"
+        ));
+
+        let mut codeberg_headers = HeaderMap::new();
+        codeberg_headers.insert("x-forgejo-signature", signature.parse().unwrap());
+        assert!(verify_codeberg(
+            &CodebergTemplate {
+                secret: secret.into()
+            },
+            &codeberg_headers,
+            body
+        ));
+        assert!(!verify_codeberg(
+            &CodebergTemplate {
+                secret: secret.into()
+            },
+            &codeberg_headers,
+            b"altered"
+        ));
+        assert!(!verify_codeberg(
+            &CodebergTemplate {
+                secret: secret.into()
+            },
+            &gitea_headers,
+            body
+        ));
+    }
+
+    #[test]
+    fn provider_delivery_ids_use_native_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-github-delivery", "github-id".parse().unwrap());
+        headers.insert("x-gitea-delivery", "gitea-id".parse().unwrap());
+        headers.insert("x-forgejo-delivery", "codeberg-id".parse().unwrap());
+        assert_eq!(
+            provider_delivery_id(&headers, "x-github-delivery", "missing", "invalid").unwrap(),
+            "github-id"
+        );
+        assert_eq!(
+            provider_delivery_id(&headers, "x-gitea-delivery", "missing", "invalid").unwrap(),
+            "gitea-id"
+        );
+        assert_eq!(
+            provider_delivery_id(&headers, "x-forgejo-delivery", "missing", "invalid").unwrap(),
+            "codeberg-id"
+        );
+        assert_eq!(
+            provider_delivery_id(&HeaderMap::new(), "x-github-delivery", "missing", "invalid"),
+            Err("missing")
+        );
+        let mut oversized = HeaderMap::new();
+        oversized.insert(
+            "x-github-delivery",
+            "x".repeat(MAX_DELIVERY_ID_LENGTH + 1).parse().unwrap(),
+        );
+        assert_eq!(
+            provider_delivery_id(&oversized, "x-github-delivery", "missing", "invalid"),
+            Err("invalid")
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_templates_authenticate_and_admit_webhooks() {
+        let secret = "provider-secret";
+        let body = Bytes::from_static(b"{}");
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(&body);
+        let signature = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let providers = [
+            (
+                Project {
+                    script: PathBuf::from("/bin/true"),
+                    gitlab: None,
+                    github: Some(GithubTemplate {
+                        secret: secret.into(),
+                    }),
+                    gitea: None,
+                    codeberg: None,
+                },
+                "x-hub-signature-256",
+                format!("sha256={signature}"),
+                "x-github-delivery",
+            ),
+            (
+                Project {
+                    script: PathBuf::from("/bin/true"),
+                    gitlab: None,
+                    github: None,
+                    gitea: Some(GiteaTemplate {
+                        secret: secret.into(),
+                    }),
+                    codeberg: None,
+                },
+                "x-gitea-signature",
+                signature.clone(),
+                "x-gitea-delivery",
+            ),
+            (
+                Project {
+                    script: PathBuf::from("/bin/true"),
+                    gitlab: None,
+                    github: None,
+                    gitea: None,
+                    codeberg: Some(CodebergTemplate {
+                        secret: secret.into(),
+                    }),
+                },
+                "x-forgejo-signature",
+                signature,
+                "x-forgejo-delivery",
+            ),
+        ];
+
+        for (index, (project, signature_header, signature, delivery_header)) in
+            providers.into_iter().enumerate()
+        {
+            let delivery_file = temporary_path(&format!("provider-webhook-{index}"));
+            let mut projects = BTreeMap::new();
+            projects.insert("example-app".to_string(), project);
+            let state = Arc::new(App {
+                projects: Arc::new(projects),
+                wake_worker: Arc::new(Notify::new()),
+                delivery_file: delivery_file.clone(),
+                accepting: Arc::new(AtomicBool::new(true)),
+            });
+            let mut headers = HeaderMap::new();
+            headers.insert(signature_header, signature.parse().unwrap());
+            headers.insert(
+                delivery_header,
+                format!("delivery-{index}").parse().unwrap(),
+            );
+            let response = webhook(
+                State(state),
+                Path("example-app".to_string()),
+                headers,
+                body.clone(),
+            )
+            .await
+            .into_response();
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            remove_files(&[&delivery_file]);
+        }
     }
 
     #[test]
@@ -1207,13 +1530,7 @@ mod tests {
     async fn webhook_deduplication_survives_service_reconstruction() {
         let delivery_file = temporary_path("webhook-durable-queue");
         let mut projects = BTreeMap::new();
-        projects.insert(
-            "example-app".to_string(),
-            Project {
-                script: PathBuf::from("/bin/true"),
-                gitlab: gitlab_template(),
-            },
-        );
+        projects.insert("example-app".to_string(), gitlab_project());
         let projects = Arc::new(projects);
         let state = Arc::new(App {
             projects: projects.clone(),
@@ -1247,13 +1564,7 @@ mod tests {
     async fn webhook_admission_closes_during_shutdown() {
         let delivery_file = temporary_path("shutdown-admission");
         let mut projects = BTreeMap::new();
-        projects.insert(
-            "example-app".to_string(),
-            Project {
-                script: PathBuf::from("/bin/true"),
-                gitlab: gitlab_template(),
-            },
-        );
+        projects.insert("example-app".to_string(), gitlab_project());
         let state = Arc::new(App {
             projects: Arc::new(projects),
             wake_worker: Arc::new(Notify::new()),

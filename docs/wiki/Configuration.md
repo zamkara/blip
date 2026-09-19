@@ -1,6 +1,6 @@
 # Configuration
 
-Blip uses one TOML file for all projects. Project identity comes from the TOML key, and each provider has its own nested template. The current implementation ships only the GitLab template.
+Blip uses one TOML file for all projects. Project identity comes from the TOML key. GitLab, GitHub, Gitea, and Codeberg each have a separate nested template.
 
 ## Minimal file
 
@@ -12,7 +12,7 @@ gitlab.signing_token = "whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 This produces **POST /webhook/example-app**.
 
-There is intentionally no name field, generic provider field, event rule, branch rule, tracking switch, timeout, or lock path in the project table.
+There is intentionally no name field, generic provider field, event rule, branch rule, tracking switch, timeout, or lock path in the project table. Each project must configure exactly one provider template.
 
 ## Global settings
 
@@ -78,6 +78,36 @@ Available fields:
 
 At least one token is required. Both may be present temporarily during migration.
 
+## GitHub template
+
+~~~toml
+[projects.website]
+script = "/srv/website/deploy"
+github.secret = "replace-with-a-random-secret"
+~~~
+
+GitHub signs the unmodified request body with HMAC-SHA256. Blip requires the **X-Hub-Signature-256** header with its **sha256=** prefix and uses **X-GitHub-Delivery** for deduplication.
+
+## Gitea template
+
+~~~toml
+[projects.internal]
+script = "/srv/internal/deploy"
+gitea.secret = "replace-with-a-random-secret"
+~~~
+
+Blip verifies the hexadecimal HMAC-SHA256 digest in **X-Gitea-Signature** and uses **X-Gitea-Delivery** for deduplication. Select Gitea's native webhook type rather than its GitHub-compatible mode.
+
+## Codeberg template
+
+~~~toml
+[projects.community]
+script = "/srv/community/deploy"
+codeberg.secret = "replace-with-a-random-secret"
+~~~
+
+Codeberg runs Forgejo. Blip verifies the hexadecimal HMAC-SHA256 digest in **X-Forgejo-Signature** and uses **X-Forgejo-Delivery** for deduplication. The separate template preserves Codeberg's native contract even though Forgejo also emits compatibility headers.
+
 ## Multiple projects
 
 ~~~toml
@@ -87,7 +117,7 @@ gitlab.signing_token = "whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 [projects.website]
 script = "/srv/website/deploy"
-gitlab.secret_token = "replace-with-a-random-secret"
+github.secret = "replace-with-a-random-secret"
 ~~~
 
 Each project gets its own endpoint and credential, but every accepted execution enters the same queue and shares the same global lock.
@@ -100,7 +130,7 @@ blip service restart
 blip service status
 ~~~
 
-Validation checks project keys, absolute script paths, file type, executable mode, token presence, Signing token encoding, and positive timestamp tolerance. Configuration is loaded at startup, so changes require a restart.
+Validation checks project keys, absolute script paths, file type, executable mode, exactly one provider template, non-empty provider secrets, GitLab Signing token encoding, and positive GitLab timestamp tolerance. Configuration is loaded at startup, so changes require a restart.
 
 ## Manage through Blip
 
@@ -112,11 +142,12 @@ blip config set --bind 127.0.0.1:8080
 blip config set --history-file /var/lib/blip/blip-history.jsonl
 
 blip project list
-blip project add --key api --script /srv/api/deploy
+blip project add --key api --script /srv/api/deploy --provider gitlab
+blip project add --key website --script /srv/website/deploy --provider github
 blip project remove api
 ~~~
 
-Project add prompts for a Signing token without echoing it. Token flags are available for automation. Project removal asks for confirmation; **--yes** is available for non-interactive use. Manual editing remains supported.
+Project add prompts for the selected provider's credential without echoing it. Use **--provider gitlab**, **github**, **gitea**, or **codeberg**; GitLab remains the CLI default for compatibility. Token flags are available for automation. Project removal asks for confirmation; **--yes** is available for non-interactive use. Manual editing remains supported.
 
 ## Old configuration
 

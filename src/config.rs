@@ -38,7 +38,14 @@ impl Default for Config {
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub script: PathBuf,
-    pub gitlab: GitlabTemplate,
+    #[serde(default)]
+    pub gitlab: Option<GitlabTemplate>,
+    #[serde(default)]
+    pub github: Option<GithubTemplate>,
+    #[serde(default)]
+    pub gitea: Option<GiteaTemplate>,
+    #[serde(default)]
+    pub codeberg: Option<CodebergTemplate>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -50,6 +57,40 @@ pub struct GitlabTemplate {
     pub secret_token: Option<String>,
     #[serde(default = "default_timestamp_tolerance")]
     pub timestamp_tolerance_seconds: i64,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GithubTemplate {
+    pub secret: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GiteaTemplate {
+    pub secret: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodebergTemplate {
+    pub secret: String,
+}
+
+impl Project {
+    pub fn provider_name(&self) -> &'static str {
+        if self.gitlab.is_some() {
+            "gitlab"
+        } else if self.github.is_some() {
+            "github"
+        } else if self.gitea.is_some() {
+            "gitea"
+        } else if self.codeberg.is_some() {
+            "codeberg"
+        } else {
+            "unconfigured"
+        }
+    }
 }
 
 pub fn default_bind() -> String {
@@ -137,22 +178,50 @@ pub fn validate(config: &Config) -> Result<()> {
             anyhow::bail!("project {key:?} script is not executable");
         }
 
-        let template = &project.gitlab;
-        if template.timestamp_tolerance_seconds <= 0 {
-            anyhow::bail!("project {key:?} GitLab timestamp tolerance must be positive");
+        let provider_count = [
+            project.gitlab.is_some(),
+            project.github.is_some(),
+            project.gitea.is_some(),
+            project.codeberg.is_some(),
+        ]
+        .into_iter()
+        .filter(|configured| *configured)
+        .count();
+        if provider_count != 1 {
+            anyhow::bail!("project {key:?} must configure exactly one provider template");
         }
-        if template.secret_token.as_deref().is_some_and(str::is_empty) {
-            anyhow::bail!("project {key:?} GitLab Secret token cannot be empty");
+
+        if let Some(template) = &project.gitlab {
+            if template.timestamp_tolerance_seconds <= 0 {
+                anyhow::bail!("project {key:?} GitLab timestamp tolerance must be positive");
+            }
+            if template.secret_token.as_deref().is_some_and(str::is_empty) {
+                anyhow::bail!("project {key:?} GitLab Secret token cannot be empty");
+            }
+            match template.signing_token.as_deref() {
+                Some(token) => {
+                    decode_signing_token(token)
+                        .with_context(|| format!("project {key:?} GitLab Signing token"))?;
+                }
+                None if template.secret_token.is_none() => {
+                    anyhow::bail!(
+                        "project {key:?} requires a GitLab Signing token or Secret token"
+                    );
+                }
+                None => {}
+            }
         }
-        match template.signing_token.as_deref() {
-            Some(token) => {
-                decode_signing_token(token)
-                    .with_context(|| format!("project {key:?} GitLab Signing token"))?;
+        for (provider, secret) in [
+            ("GitHub", project.github.as_ref().map(|value| &value.secret)),
+            ("Gitea", project.gitea.as_ref().map(|value| &value.secret)),
+            (
+                "Codeberg",
+                project.codeberg.as_ref().map(|value| &value.secret),
+            ),
+        ] {
+            if secret.is_some_and(|value| value.is_empty()) {
+                anyhow::bail!("project {key:?} {provider} secret cannot be empty");
             }
-            None if template.secret_token.is_none() => {
-                anyhow::bail!("project {key:?} requires a GitLab Signing token or Secret token");
-            }
-            None => {}
         }
     }
 
@@ -194,19 +263,34 @@ pub fn render(config: &Config, reveal_secrets: bool) -> String {
             "script = \"{}\"\n",
             escape(&project.script.to_string_lossy())
         ));
-        if let Some(token) = &project.gitlab.signing_token {
-            let value = if reveal_secrets { token } else { "<redacted>" };
-            output.push_str(&format!("gitlab.signing_token = \"{}\"\n", escape(value)));
+        if let Some(template) = &project.gitlab {
+            if let Some(token) = &template.signing_token {
+                let value = if reveal_secrets { token } else { "<redacted>" };
+                output.push_str(&format!("gitlab.signing_token = \"{}\"\n", escape(value)));
+            }
+            if let Some(token) = &template.secret_token {
+                let value = if reveal_secrets { token } else { "<redacted>" };
+                output.push_str(&format!("gitlab.secret_token = \"{}\"\n", escape(value)));
+            }
+            if template.timestamp_tolerance_seconds != default_timestamp_tolerance() {
+                output.push_str(&format!(
+                    "gitlab.timestamp_tolerance_seconds = {}\n",
+                    template.timestamp_tolerance_seconds
+                ));
+            }
         }
-        if let Some(token) = &project.gitlab.secret_token {
-            let value = if reveal_secrets { token } else { "<redacted>" };
-            output.push_str(&format!("gitlab.secret_token = \"{}\"\n", escape(value)));
-        }
-        if project.gitlab.timestamp_tolerance_seconds != default_timestamp_tolerance() {
-            output.push_str(&format!(
-                "gitlab.timestamp_tolerance_seconds = {}\n",
-                project.gitlab.timestamp_tolerance_seconds
-            ));
+        for (provider, secret) in [
+            ("github", project.github.as_ref().map(|value| &value.secret)),
+            ("gitea", project.gitea.as_ref().map(|value| &value.secret)),
+            (
+                "codeberg",
+                project.codeberg.as_ref().map(|value| &value.secret),
+            ),
+        ] {
+            if let Some(secret) = secret {
+                let value = if reveal_secrets { secret } else { "<redacted>" };
+                output.push_str(&format!("{provider}.secret = \"{}\"\n", escape(value)));
+            }
         }
     }
     output
@@ -276,11 +360,14 @@ mod tests {
             "example-app".into(),
             Project {
                 script: PathBuf::from("/bin/true"),
-                gitlab: GitlabTemplate {
+                gitlab: Some(GitlabTemplate {
                     signing_token: None,
                     secret_token: Some("test-secret".into()),
                     timestamp_tolerance_seconds: 300,
-                },
+                }),
+                github: None,
+                gitea: None,
+                codeberg: None,
             },
         );
         config
@@ -337,5 +424,57 @@ mod tests {
             ),
             PathBuf::from("/data/blip/history.jsonl")
         );
+    }
+
+    #[test]
+    fn projects_require_exactly_one_provider_template() {
+        let missing = toml::from_str::<Config>(
+            r#"
+            [projects.app]
+            script = "/bin/true"
+            "#,
+        )
+        .unwrap();
+        assert!(validate(&missing).is_err());
+
+        let multiple = toml::from_str::<Config>(
+            r#"
+            [projects.app]
+            script = "/bin/true"
+            github.secret = "one"
+            gitea.secret = "two"
+            "#,
+        )
+        .unwrap();
+        assert!(validate(&multiple).is_err());
+    }
+
+    #[test]
+    fn provider_templates_round_trip_and_redact_secrets() {
+        let config = toml::from_str::<Config>(
+            r#"
+            [projects.github]
+            script = "/bin/true"
+            github.secret = "github-secret"
+
+            [projects.gitea]
+            script = "/bin/true"
+            gitea.secret = "gitea-secret"
+
+            [projects.codeberg]
+            script = "/bin/true"
+            codeberg.secret = "codeberg-secret"
+            "#,
+        )
+        .unwrap();
+        validate(&config).unwrap();
+        let redacted = render(&config, false);
+        assert!(!redacted.contains("github-secret"));
+        assert!(!redacted.contains("gitea-secret"));
+        assert!(!redacted.contains("codeberg-secret"));
+        assert_eq!(redacted.matches("<redacted>").count(), 3);
+        let revealed = render(&config, true);
+        let reparsed = toml::from_str::<Config>(&revealed).unwrap();
+        validate(&reparsed).unwrap();
     }
 }

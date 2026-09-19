@@ -3,8 +3,8 @@ mod runtime;
 mod system;
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
-use config::{GitlabTemplate, Project};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use config::{CodebergTemplate, GiteaTemplate, GithubTemplate, GitlabTemplate, Project};
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
@@ -77,14 +77,24 @@ struct ProjectAddArgs {
     key: String,
     #[arg(long, value_name = "FILE")]
     script: PathBuf,
+    #[arg(long, value_enum, default_value_t = ProviderKind::Gitlab)]
+    provider: ProviderKind,
     #[arg(long, conflicts_with = "secret_token")]
     signing_token: Option<String>,
-    #[arg(long, conflicts_with = "signing_token")]
+    #[arg(long, visible_alias = "secret", conflicts_with = "signing_token")]
     secret_token: Option<String>,
-    #[arg(long, default_value_t = 300)]
-    timestamp_tolerance_seconds: i64,
+    #[arg(long)]
+    timestamp_tolerance_seconds: Option<i64>,
     #[arg(long)]
     replace: bool,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ProviderKind {
+    Gitlab,
+    Github,
+    Gitea,
+    Codeberg,
 }
 
 #[derive(Args)]
@@ -223,7 +233,11 @@ fn handle_project(command: ProjectCommand, path: &Path) -> Result<()> {
         ProjectCommand::List => {
             let config = config::load(path)?;
             for (key, project) in config.projects {
-                println!("{key}\tgitlab\t{}", project.script.display());
+                println!(
+                    "{key}\t{}\t{}",
+                    project.provider_name(),
+                    project.script.display()
+                );
             }
         }
         ProjectCommand::Add(mut arguments) => {
@@ -236,18 +250,8 @@ fn handle_project(command: ProjectCommand, path: &Path) -> Result<()> {
                 );
             }
 
-            let (signing_token, secret_token) = credentials(&mut arguments)?;
-            config.projects.insert(
-                arguments.key.clone(),
-                Project {
-                    script: arguments.script,
-                    gitlab: GitlabTemplate {
-                        signing_token,
-                        secret_token,
-                        timestamp_tolerance_seconds: arguments.timestamp_tolerance_seconds,
-                    },
-                },
-            );
+            let project = project_from_arguments(&mut arguments)?;
+            config.projects.insert(arguments.key.clone(), project);
             config::save(path, &config)?;
             println!("saved project {}", arguments.key);
         }
@@ -268,7 +272,52 @@ fn handle_project(command: ProjectCommand, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn credentials(arguments: &mut ProjectAddArgs) -> Result<(Option<String>, Option<String>)> {
+fn project_from_arguments(arguments: &mut ProjectAddArgs) -> Result<Project> {
+    let script = arguments.script.clone();
+    match arguments.provider {
+        ProviderKind::Gitlab => {
+            let (signing_token, secret_token) = gitlab_credentials(arguments)?;
+            Ok(Project {
+                script,
+                gitlab: Some(GitlabTemplate {
+                    signing_token,
+                    secret_token,
+                    timestamp_tolerance_seconds: arguments
+                        .timestamp_tolerance_seconds
+                        .unwrap_or_else(config::default_timestamp_tolerance),
+                }),
+                github: None,
+                gitea: None,
+                codeberg: None,
+            })
+        }
+        provider => {
+            if arguments.signing_token.is_some() {
+                anyhow::bail!("--signing-token is available only for the GitLab template");
+            }
+            if arguments.timestamp_tolerance_seconds.is_some() {
+                anyhow::bail!(
+                    "--timestamp-tolerance-seconds is available only for the GitLab template"
+                );
+            }
+            let secret = provider_secret(arguments, provider)?;
+            Ok(Project {
+                script,
+                gitlab: None,
+                github: matches!(provider, ProviderKind::Github).then(|| GithubTemplate {
+                    secret: secret.clone(),
+                }),
+                gitea: matches!(provider, ProviderKind::Gitea).then(|| GiteaTemplate {
+                    secret: secret.clone(),
+                }),
+                codeberg: matches!(provider, ProviderKind::Codeberg)
+                    .then(|| CodebergTemplate { secret }),
+            })
+        }
+    }
+}
+
+fn gitlab_credentials(arguments: &mut ProjectAddArgs) -> Result<(Option<String>, Option<String>)> {
     if arguments.signing_token.is_some() || arguments.secret_token.is_some() {
         return Ok((
             arguments.signing_token.take(),
@@ -286,6 +335,23 @@ fn credentials(arguments: &mut ProjectAddArgs) -> Result<(Option<String>, Option
         anyhow::bail!("a GitLab Signing token or Secret token is required");
     }
     Ok((None, Some(secret_token)))
+}
+
+fn provider_secret(arguments: &mut ProjectAddArgs, provider: ProviderKind) -> Result<String> {
+    if let Some(secret) = arguments.secret_token.take() {
+        return Ok(secret);
+    }
+    let label = match provider {
+        ProviderKind::Github => "GitHub webhook secret: ",
+        ProviderKind::Gitea => "Gitea webhook secret: ",
+        ProviderKind::Codeberg => "Codeberg webhook secret: ",
+        ProviderKind::Gitlab => unreachable!(),
+    };
+    let secret = rpassword::prompt_password(label)?;
+    if secret.is_empty() {
+        anyhow::bail!("a webhook secret is required");
+    }
+    Ok(secret)
 }
 
 fn handle_service(command: ServiceCommand, config_path: &Path) -> Result<()> {
@@ -362,5 +428,53 @@ mod tests {
         let cli = Cli::try_parse_from(["blip", "-U"]).unwrap();
         assert!(cli.upgrade);
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn project_add_accepts_each_provider_template() {
+        for provider in ["gitlab", "github", "gitea", "codeberg"] {
+            let cli = Cli::try_parse_from([
+                "blip",
+                "project",
+                "add",
+                "--key",
+                "example",
+                "--script",
+                "/bin/true",
+                "--provider",
+                provider,
+                "--secret-token",
+                "test-secret",
+            ]);
+            assert!(cli.is_ok(), "provider {provider} must parse");
+        }
+    }
+
+    #[test]
+    fn project_add_builds_only_the_selected_provider_template() {
+        for provider in [
+            ProviderKind::Gitlab,
+            ProviderKind::Github,
+            ProviderKind::Gitea,
+            ProviderKind::Codeberg,
+        ] {
+            let expected = match provider {
+                ProviderKind::Gitlab => "gitlab",
+                ProviderKind::Github => "github",
+                ProviderKind::Gitea => "gitea",
+                ProviderKind::Codeberg => "codeberg",
+            };
+            let mut arguments = ProjectAddArgs {
+                key: "example".into(),
+                script: PathBuf::from("/bin/true"),
+                provider,
+                signing_token: None,
+                secret_token: Some("test-secret".into()),
+                timestamp_tolerance_seconds: None,
+                replace: false,
+            };
+            let project = project_from_arguments(&mut arguments).unwrap();
+            assert_eq!(project.provider_name(), expected);
+        }
     }
 }

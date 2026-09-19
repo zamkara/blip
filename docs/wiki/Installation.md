@@ -31,13 +31,14 @@ sudo blip service install --user "$USER"
 
 ### Initial setup prompt
 
-The first run asks only for:
+The first run asks for:
 
 1. Project key for **/webhook/<key>**.
 2. Absolute executable file path.
-3. GitLab Signing token. Leave it empty only to enter a legacy Secret token.
+3. GitLab, GitHub, Gitea, or Codeberg as the provider.
+4. The selected provider's credential. GitLab prefers a Signing token; the other templates require a webhook secret.
 
-Event and branch selection stay in GitLab.
+Event selection stays at the Git host. GitLab branch selection also remains in its webhook form.
 
 The same command also handles installations created with the obsolete **[[projects]]** schema. It detects that schema, saves the old file as a timestamped backup, and opens the current configuration prompt. No migration flag is required.
 
@@ -49,6 +50,7 @@ sudo env \
   BLIP_SERVICE_USER="deploy" \
   BLIP_PROJECT_KEY="example-app" \
   BLIP_SCRIPT="/srv/example-app/deploy" \
+  BLIP_PROVIDER="gitlab" \
   BLIP_SIGNING_TOKEN="whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" \
   bash /path/to/install.sh
 ~~~
@@ -68,8 +70,9 @@ Use **BLIP_SECRET_TOKEN** instead of **BLIP_SIGNING_TOKEN** only for legacy GitL
 | **BLIP_INSTALL_DEPENDENCIES** | **1** | Set to **0** to forbid automatic native dependency installation. |
 | **BLIP_PROJECT_KEY** | prompt | Project key and endpoint segment. |
 | **BLIP_SCRIPT** | prompt | Absolute executable file path. |
+| **BLIP_PROVIDER** | **gitlab** | Initial provider: **gitlab**, **github**, **gitea**, or **codeberg**. |
 | **BLIP_SIGNING_TOKEN** | prompt | Preferred GitLab token. |
-| **BLIP_SECRET_TOKEN** | prompt | Legacy GitLab token. |
+| **BLIP_SECRET_TOKEN** | prompt | Legacy GitLab token or GitHub, Gitea, or Codeberg webhook secret. |
 | **BLIP_RECONFIGURE** | **0** | Set to **1** to back up and replace the existing TOML file. |
 
 No installer setting exists for provider, event, branch, tracking, timeout, or lock path.
