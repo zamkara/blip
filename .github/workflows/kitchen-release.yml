@@ -224,7 +224,7 @@ jobs:
           else
             gh release create "$TAG_NAME" release-assets/* \
               --repo "${{ github.repository }}" \
-              --target dev \
+              --target kitchen \
               --title "$RELEASE_NAME" \
               --notes-file release_notes.md \
               --latest
