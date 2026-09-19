@@ -21,7 +21,7 @@ Blip is not:
 
 - a hosted runner;
 - a workflow language;
-- a replacement for GitLab event and branch filters;
+- a replacement for Git-host event controls or available branch filters;
 - a deployment-script generator;
 - a general CI/CD platform;
 - a web dashboard in the initial release.
@@ -38,10 +38,10 @@ Preserve these decisions unless the user explicitly changes the product design:
    duplicate `name` field.
 2. Provider behavior uses nested provider-specific templates. Do not add a
    public generic `provider = "..."` switch.
-3. GitLab is the first provider template. Future GitHub, Gitea, and Codeberg
-   support must use their own nested schemas and signature contracts.
-4. GitLab owns event and branch selection. Do not add `event`, `branch`, or
-   `track` fields to Blip configuration.
+3. GitLab, GitHub, Gitea, and Codeberg use their own nested schemas and native
+   signature contracts.
+4. Git hosts own event selection and any available branch filtering. Do not add
+   `event`, `branch`, or `track` fields to Blip configuration.
 5. `script` is an absolute path to one executable file. It is not a directory,
    shell expression, inline script, or list of build steps.
 6. All projects share one bounded FIFO queue and one worker.
@@ -79,6 +79,9 @@ The following behavior is implemented and must remain covered by tests:
 - optional legacy `X-Gitlab-Token` verification;
 - signed-request timestamp tolerance;
 - support for multiple space-separated signatures;
+- GitHub `X-Hub-Signature-256` verification;
+- Gitea `X-Gitea-Signature` verification;
+- Codeberg/Forgejo `X-Forgejo-Signature` verification;
 - keyed multi-project configuration;
 - global queue capacity of 128 waiting jobs;
 - durable FIFO queue state across service restarts;
@@ -88,6 +91,7 @@ The following behavior is implemented and must remain covered by tests:
 - serial script execution under one advisory execution lock;
 - persistent delivery-ID claims using `webhook-id`;
 - `Idempotency-Key` fallback for legacy GitLab deliveries;
+- provider-native GitHub, Gitea, and Forgejo delivery IDs;
 - `202 queued` for a new admitted delivery;
 - `202 duplicate` for an already accepted project and delivery ID;
 - structured JSONL execution history;
@@ -159,6 +163,8 @@ path, webhook credential, or real token in tracked files.
 - `docs/wiki/Configuration.md` owns the complete public TOML contract.
 - `docs/wiki/GitLab.md` owns GitLab form values, authentication headers, and
   webhook testing behavior.
+- `docs/wiki/GitHub.md`, `Gitea.md`, and `Codeberg.md` own the corresponding
+  provider setup, authentication headers, and limitations.
 - `docs/wiki/Architecture.md` owns queue, locking, execution, history, and
   delivery-admission behavior.
 - `docs/wiki/Security.md` owns threat boundaries and known security gaps.
@@ -360,8 +366,8 @@ and pass `bash -n docs/install.sh`.
 
 ## Security rules
 
-- Prefer GitLab Signing tokens; retain Secret token support only for migration
-  and compatibility.
+- Prefer GitLab Signing tokens; retain its Secret token support only for
+  migration and compatibility. Require HMAC secrets for the other providers.
 - Never commit a real `whsec_...` value, Secret token, private key, certificate,
   tunnel credential, or access token.
 - Examples must use unmistakably synthetic credentials.

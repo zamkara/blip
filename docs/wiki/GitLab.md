@@ -1,6 +1,6 @@
 # GitLab webhook template
 
-GitLab is the first implemented webhook template. Blip verifies GitLab authentication headers but leaves event and branch selection to GitLab's webhook settings.
+Blip verifies GitLab authentication headers but leaves event and branch selection to GitLab's webhook settings.
 
 ## Blip side
 

@@ -3,12 +3,12 @@
 ## Request path
 
 ~~~text
-GitLab
+GitLab, GitHub, Gitea, or Codeberg
   │ POST /webhook/<project-key>
   ▼
 Project map lookup
   ▼
-GitLab template authentication
+provider-template authentication
   ▼
 Durable FIFO admission (128 waiting entries)
   ▼
@@ -21,7 +21,7 @@ Executable script file
 JSONL history record
 ~~~
 
-Blip does not parse the event or branch. GitLab decides whether to send the request through the webhook's trigger controls.
+Blip does not parse event or branch policy. The Git host decides which events to send; GitLab also provides a branch filter. Providers without an equivalent branch filter can trigger the fixed deployment executable for every selected event.
 
 ## Queue ownership
 
@@ -83,7 +83,7 @@ This is closer to package-manager locking than creating one marker file for ever
 
 The worker starts exactly the file in **script** and passes no webhook body or command-line arguments. Standard output and standard error inherit the Blip service streams and are available through **blip logs**.
 
-The worker waits for the process. This preserves serial execution while the HTTP request itself remains asynchronous: GitLab receives **202** after queueing, not after completion.
+The worker waits for the process. This preserves serial execution while the HTTP request itself remains asynchronous: the Git host receives **202** after queueing, not after completion.
 
 ## History
 

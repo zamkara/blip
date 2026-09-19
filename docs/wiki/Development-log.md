@@ -55,3 +55,11 @@ This page preserves early public development summaries. Starting on 2026-09-17, 
 - Simplified first installation to a direct **curl | sudo bash** command with automatic non-root build-user detection.
 - Fixed service installation to restart an already-running service after replacing its binary.
 - Set the Phase 1 package version to **0.2.0** and documented that Phase 1 remains on **0.x** while Phase 2 begins at **1.0.0**.
+
+## 2026-09-19T09:51:25+07:00
+
+- Added separate GitHub, Gitea, and Codeberg provider templates without adding a generic provider field to TOML.
+- Implemented provider-native HMAC-SHA256 authentication and durable delivery-ID deduplication headers.
+- Extended project creation and first installation with provider selection while preserving GitLab as the compatibility default.
+- Added provider-specific setup documentation and moved provider templates out of pending roadmap work.
+- Advanced the Phase 1 package version to **0.3.0**.

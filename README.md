@@ -1,8 +1,8 @@
 # Blip
 
-Blip turns an authenticated GitLab webhook delivery into one local executable run. GitLab decides which event and branch may send the webhook; Blip verifies the request, rejects duplicate delivery IDs, places new deliveries in a single queue, and runs the configured script file.
+Blip turns an authenticated Git-host webhook delivery into one local executable run. It verifies the provider-specific signature, rejects duplicate delivery IDs, places new deliveries in a single queue, and runs the configured script file.
 
-> **Status:** Phase 1 development, version **0.2.1**. The current release provides the GitLab template, management CLI, systemd installation, a durable serial queue, graceful shutdown, in-place upgrades, logs, and basic history. Phase 1 remains on **0.x** releases; Phase 2 begins at **1.0.0**.
+> **Status:** Phase 1 development, version **0.3.0**. The current release provides GitLab, GitHub, Gitea, and Codeberg templates, management CLI, systemd installation, a durable serial queue, graceful shutdown, in-place upgrades, logs, and basic history. Phase 1 remains on **0.x** releases; Phase 2 begins at **1.0.0**.
 
 ## Why Blip
 
@@ -10,7 +10,7 @@ Blip replaces the repeated SSH → pull → deploy routine without requiring hos
 
 ## Configuration
 
-One project needs only an endpoint key, an executable file, and a GitLab credential:
+One project needs only an endpoint key, an executable file, and exactly one provider template:
 
 ~~~toml
 [projects.example-app]
@@ -19,9 +19,9 @@ gitlab.signing_token = "whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 ~~~
 
 - **example-app** becomes **/webhook/example-app**; there is no duplicate name field.
-- The nested **gitlab** table selects the GitLab webhook template; there is no generic provider switch.
+- The nested **gitlab**, **github**, **gitea**, or **codeberg** table selects the webhook template; there is no generic provider field in TOML.
 - **script** is an absolute path to an executable file, not a directory and not a shell command.
-- Event and branch rules are configured once in GitLab, not repeated in Blip.
+- Event controls remain at the Git host instead of being repeated in Blip.
 - Queue locking is internal and global; it is not project configuration.
 - For an existing webhook, **secret_token** may replace or temporarily accompany **signing_token**.
 
@@ -60,7 +60,7 @@ The first run asks for:
 
 1. The project key used in the webhook URL.
 2. The absolute path to the executable script file.
-3. A GitLab Signing token, or a legacy Secret token when no Signing token is supplied.
+3. A provider and its webhook credential. GitLab prefers a Signing token; the other templates use their webhook secret.
 
 If the installer finds the obsolete **[[projects]]** schema, the same command backs it up and starts the current configuration prompt automatically. After the first installation, use **blip --upgrade** instead of downloading the installer again. Full options are documented in [Installation](docs/wiki/Installation.md).
 
@@ -91,11 +91,29 @@ For a deployment after a merge into **dev**, configure GitLab:
 
 The merge updates **dev**, GitLab emits the selected push webhook, and Blip queues the script. No event or branch field is needed in Blip.
 
+## Other Git hosts
+
+~~~toml
+[projects.github-app]
+script = "/srv/github-app/deploy"
+github.secret = "replace-with-a-random-secret"
+
+[projects.gitea-app]
+script = "/srv/gitea-app/deploy"
+gitea.secret = "replace-with-a-random-secret"
+
+[projects.codeberg-app]
+script = "/srv/codeberg-app/deploy"
+codeberg.secret = "replace-with-a-random-secret"
+~~~
+
+All providers use **POST /webhook/<project-key>**. See the [GitHub](docs/wiki/GitHub.md), [Gitea](docs/wiki/Gitea.md), and [Codeberg](docs/wiki/Codeberg.md) setup guides for their native signature and delivery headers.
+
 ## Queue and lock
 
 Accepted deliveries are appended to **blip-deliveries.jsonl** beside the history file before Blip returns **202 queued**. The journal stores FIFO sequence and **queued**, **running**, or **completed** state. Waiting entries survive a service restart. An entry interrupted while running returns to the queue at startup after Blip obtains the global execution lock.
 
-A retry with the same GitLab **webhook-id** receives **202 duplicate** and does not create another queue entry. One worker consumes the queue, and **blip.queue.lock** prevents scripts from overlapping even if two Blip processes use the same runtime directory. A script interrupted by process or host failure may run again, so deployment scripts must remain idempotent.
+A retry with the same provider delivery ID receives **202 duplicate** and does not create another queue entry. One worker consumes the queue, and **blip.queue.lock** prevents scripts from overlapping even if two Blip processes use the same runtime directory. A script interrupted by process or host failure may run again, so deployment scripts must remain idempotent.
 
 SIGTERM or SIGINT closes webhook admission and lets the active script finish. Waiting entries remain durable and resume after the next start. Blip does not begin another queued script while shutting down.
 
@@ -108,7 +126,8 @@ blip config validate
 blip config set --bind 127.0.0.1:8080
 
 blip project list
-blip project add --key example-app --script /srv/example-app/deploy
+blip project add --key example-app --script /srv/example-app/deploy --provider gitlab
+blip project add --key mirror --script /srv/mirror/deploy --provider github
 blip project remove example-app
 
 blip history --project example-app --status failure --limit 20
@@ -138,8 +157,8 @@ Phase 1 uses **0.x** versions while the provider set and operational contracts a
 | --- | --- |
 | **202 queued** | The request was authenticated, recorded, and added to the queue. |
 | **202 duplicate** | This project and delivery ID were already accepted; the script was not queued again. |
-| **400 Bad Request** | The GitLab delivery ID is missing, invalid, or conflicting. |
-| **401 Unauthorized** | GitLab authentication failed. |
+| **400 Bad Request** | The provider delivery ID is missing, invalid, or conflicting. |
+| **401 Unauthorized** | Provider authentication failed. |
 | **404 Not Found** | The project key is not configured. |
 | **503 Service Unavailable** | Blip is shutting down, the 128-entry waiting queue is full, or the durable queue journal cannot be trusted. |
 
@@ -163,6 +182,9 @@ The binary is written to **target/release/blip**.
 - [Installation](docs/wiki/Installation.md)
 - [Configuration](docs/wiki/Configuration.md)
 - [GitLab setup](docs/wiki/GitLab.md)
+- [GitHub setup](docs/wiki/GitHub.md)
+- [Gitea setup](docs/wiki/Gitea.md)
+- [Codeberg setup](docs/wiki/Codeberg.md)
 - [Runtime and queue](docs/wiki/Architecture.md)
 - [Security](docs/wiki/Security.md)
 - [Roadmap](docs/wiki/Roadmap.md)

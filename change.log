@@ -330,6 +330,116 @@ State recorded:
 - Changes remain uncommitted and unpushed.
 - dev remains untouched.
 
+2026-09-19T09:51:25+07:00
+---------------------------------
+Scope: GitHub, Gitea, and Codeberg provider templates
+Branch: feature/provider-templates
+
+- Added mutually exclusive nested GitHub, Gitea, and Codeberg configuration
+  templates while preserving the existing GitLab schema.
+- Added GitHub X-Hub-Signature-256 authentication with X-GitHub-Delivery,
+  native Gitea X-Gitea-Signature with X-Gitea-Delivery, and native
+  Codeberg/Forgejo X-Forgejo-Signature with X-Forgejo-Delivery.
+- Verified provider HMAC signatures over the unmodified request body and kept
+  credential comparisons constant-time through HMAC verification.
+- Extended project add with provider selection, provider-aware secret prompts,
+  list output, validation, rendering, redaction, and round-trip coverage.
+- Extended initial installation with BLIP_PROVIDER and provider validation.
+- Restored upgrade preflight discovery of the installed non-root service user
+  before binary replacement and retained compatibility with older GitLab-only
+  binaries during default initial setup.
+- Added provider-specific wiki pages, updated all affected public references,
+  and moved provider templates from pending roadmap scope to implemented scope.
+- Advanced the Phase 1 package version from 0.2.1 to 0.3.0.
+
+Files added:
+- docs/wiki/Codeberg.md
+- docs/wiki/GitHub.md
+- docs/wiki/Gitea.md
+
+Files modified:
+- AGENTS.md
+- Cargo.lock
+- Cargo.toml
+- README.md
+- change.log
+- docs/examples/blip.toml.example
+- docs/install.sh
+- docs/wiki/Architecture.md
+- docs/wiki/Configuration.md
+- docs/wiki/Development-log.md
+- docs/wiki/GitLab.md
+- docs/wiki/Home.md
+- docs/wiki/Installation.md
+- docs/wiki/Roadmap.md
+- docs/wiki/Security.md
+- src/config.rs
+- src/main.rs
+- src/runtime.rs
+
+Validation recorded:
+- Focused provider, configuration, CLI, and webhook-admission tests: 35 passed.
+- git diff --check: passed.
+- cargo fmt --all -- --check: passed.
+- cargo test --locked --all-targets: 35 passed.
+- cargo clippy --locked --all-targets --all-features -- -D warnings: passed.
+- cargo build --locked --release: passed.
+- bash -n docs/install.sh: passed.
+- Release CLI inspection reported blip 0.3.0 and all four provider values.
+- Repository identity and credential scan found no personal path, private
+  hostname, tunnel ID, SSH remote, or real Signing token.
+
+State recorded:
+- Changes are uncommitted and unpushed.
+- dev was not modified or merged.
+
+2026-09-19T09:52:07+07:00
+---------------------------------
+Scope: Final provider-template validation
+Branch: feature/provider-templates
+
+- Completed the full repository validation gate after implementation,
+  installer, metadata, documentation, and roadmap updates.
+
+Files modified:
+- change.log
+
+Validation recorded:
+- git diff --check passed after this final log update.
+
+State recorded:
+- Changes remain uncommitted and unpushed.
+- dev remains untouched.
+
+2026-09-19T09:56:48+07:00
+---------------------------------
+Scope: Pre-commit provider audit
+Branch: feature/provider-templates
+
+- Added negative coverage for altered GitHub, Gitea, and Codeberg payloads,
+  the required GitHub signature prefix, and missing or oversized delivery IDs.
+- Verified that CLI project construction materializes only the selected nested
+  provider template.
+- Rechecked Forgejo's native signature and delivery headers against its current
+  official webhook documentation.
+
+Files modified:
+- change.log
+- src/main.rs
+- src/runtime.rs
+
+Validation recorded:
+- git diff --check: passed.
+- cargo fmt --all -- --check: passed.
+- cargo test --locked --all-targets: 35 passed.
+- cargo clippy --locked --all-targets --all-features -- -D warnings: passed.
+- cargo build --locked --release: passed.
+- bash -n docs/install.sh: passed.
+
+State recorded:
+- Changes are ready for the authorized commit and push.
+- dev remains untouched.
+
 2026-09-18T22:25:20+07:00
 ---------------------------------
 Scope: Pre-built binary installation method and documentation

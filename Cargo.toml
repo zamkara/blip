@@ -1,12 +1,12 @@
 [package]
 name = "bliper"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "Minimal Webhook Delivery Bridge"
 license-file = "LICENSE"
 repository = "https://gitlab.com/almateraincubator/utilities/blip"
 readme = "README.md"
-keywords = ["deployment", "gitlab", "systemd", "webhook"]
+keywords = ["deployment", "git", "systemd", "webhook"]
 categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]

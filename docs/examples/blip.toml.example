@@ -1,3 +1,15 @@
 [projects.example-app]
 script = "/srv/example-app/deploy.sh"
 gitlab.signing_token = "whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+[projects.github-app]
+script = "/srv/github-app/deploy"
+github.secret = "replace-with-a-random-secret"
+
+[projects.gitea-app]
+script = "/srv/gitea-app/deploy"
+gitea.secret = "replace-with-a-random-secret"
+
+[projects.codeberg-app]
+script = "/srv/codeberg-app/deploy"
+codeberg.secret = "replace-with-a-random-secret"
