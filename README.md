@@ -64,7 +64,7 @@ The first run asks for:
 2. The absolute path to the executable script file.
 3. A GitLab Signing token, or a legacy Secret token when no Signing token is supplied.
 
-If the installer finds the obsolete **[[projects]]** schema, the same command backs it up and starts the current configuration prompt automatically. After the first installation, use **blip --upgrade** instead of downloading the installer again. Full options are documented in [Installation](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/installation).
+If the installer finds the obsolete **projects-array schema**, the same command backs it up and starts the current configuration prompt automatically. After the first installation, use **blip --upgrade** instead of downloading the installer again. Full options are documented in [Installation](https://gitlab.com/almateraincubator/utilities/blip/-/wikis/installation).
 
 ## Upgrade
 
